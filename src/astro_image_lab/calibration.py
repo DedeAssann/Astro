@@ -35,18 +35,17 @@ def make_master_bias(bias_files, method="median"):
     return _combine_frames(bias_stack, method)
 
 
-def make_master_flat(flat_files, master_bias, method="median"):
+def make_master_flat(flat_files, master_bias, combine_method="mean"):
     """Build a normalized master flat after subtracting the master bias.
 
-    This preserves the original TP ``doc/processing.py`` scientific behavior:
-    each flat is bias-subtracted, normalized by ``np.median`` of that
-    bias-subtracted flat, accumulated with equal weight, and the resulting
-    master flat is renormalized by ``np.median(master_flat)``. The ``method``
-    argument is kept for API consistency; ``"median"`` is the supported
-    normalization behavior for this TP-compatible implementation.
+    This preserves the original TP ``doc/processing.py`` scientific behavior by
+    default: each flat is bias-subtracted, normalized by ``np.median`` of that
+    bias-subtracted flat, combined with an arithmetic mean via equal-weight
+    accumulation, and the resulting master flat is renormalized by
+    ``np.median(master_flat)``.
     """
-    if method != "median":
-        raise ValueError("make_master_flat follows doc/processing.py and supports method='median'")
+    if combine_method != "mean":
+        raise ValueError("make_master_flat follows doc/processing.py and supports combine_method='mean'")
 
     flat_files = list(flat_files)
     if not flat_files:
@@ -62,12 +61,16 @@ def make_master_flat(flat_files, master_bias, method="median"):
         flat_median = np.median(bias_subtracted)
         if not np.isfinite(flat_median) or flat_median == 0:
             raise ValueError("bias-subtracted flat frame has an invalid median")
+        # Match doc/processing.py exactly for valid pixels:
+        # master_flat += tmp / np.median(tmp) / len(list_flat)
         master_flat += bias_subtracted / flat_median / len(flat_files)
 
     master_flat_median = np.median(master_flat)
     if not np.isfinite(master_flat_median) or master_flat_median == 0:
         raise ValueError("master flat has an invalid median")
 
+    # Match doc/processing.py exactly for valid pixels:
+    # master_flat /= np.median(master_flat)
     master_flat = master_flat / master_flat_median
 
     # Keep valid-pixel behavior identical to doc/processing.py, but prevent

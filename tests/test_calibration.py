@@ -23,12 +23,13 @@ def test_make_master_bias_matches_nanmedian_stack(monkeypatch):
     np.testing.assert_array_equal(master_bias, expected)
 
 
-def test_make_master_flat_matches_processing_py_logic(monkeypatch):
+def test_make_master_flat_matches_processing_py_mean_accumulation(monkeypatch):
     frames = {
-        "flat_1.fits": np.array([[12, 22], [32, 42]], dtype=float),
-        "flat_2.fits": np.array([[22, 32], [42, 52]], dtype=float),
+        "flat_1.fits": np.array([[2, 2], [2, 2]], dtype=float),
+        "flat_2.fits": np.array([[2, 2], [2, 2]], dtype=float),
+        "flat_3.fits": np.array([[20, 2], [2, 2]], dtype=float),
     }
-    master_bias = np.array([[2, 2], [2, 2]], dtype=float)
+    master_bias = np.zeros((2, 2), dtype=float)
     monkeypatch.setattr(calibration, "load_fits", lambda path: (frames[path], {}))
 
     master_flat = calibration.make_master_flat(list(frames), master_bias)
@@ -39,9 +40,16 @@ def test_make_master_flat_matches_processing_py_logic(monkeypatch):
         expected += tmp / np.median(tmp) / len(frames)
     expected /= np.median(expected)
 
+    median_combined = np.median(
+        np.asarray([(flat - master_bias) / np.median(flat - master_bias) for flat in frames.values()]),
+        axis=0,
+    )
+    median_combined /= np.median(median_combined)
+
     assert master_flat.shape == (2, 2)
     assert np.isclose(np.median(master_flat), 1.0)
     np.testing.assert_allclose(master_flat, expected)
+    assert not np.allclose(master_flat, median_combined)
 
 
 def test_calibrate_science_image_applies_formula_on_valid_pixels():
