@@ -1,4 +1,4 @@
-"""Calibration helpers extracted from the original astronomy notebook."""
+"""Calibration helpers following the original TP ``doc/processing.py`` logic."""
 
 import numpy as np
 
@@ -6,7 +6,7 @@ from .io import load_fits
 
 
 def _combine_frames(frames, method):
-    """Combine a stack of frames with the requested notebook-style method."""
+    """Combine a stack of frames; the TP default is a per-pixel median."""
     if method == "median":
         return np.nanmedian(frames, axis=0)
     if method == "mean":
@@ -21,7 +21,13 @@ def _load_image_data(path):
 
 
 def make_master_bias(bias_files, method="median"):
-    """Build a master bias by combining individual bias frames."""
+    """Build a master bias from individual bias frames.
+
+    This follows the original TP ``doc/processing.py`` behavior: load all bias
+    images into a 3D stack and compute ``np.nanmedian(stack, axis=0)`` by
+    default.
+    """
+    bias_files = list(bias_files)
     if not bias_files:
         raise ValueError("bias_files must contain at least one FITS file")
 
@@ -30,27 +36,42 @@ def make_master_bias(bias_files, method="median"):
 
 
 def make_master_flat(flat_files, master_bias, method="median"):
-    """Build a normalized master flat after subtracting the master bias."""
+    """Build a normalized master flat after subtracting the master bias.
+
+    This preserves the original TP ``doc/processing.py`` scientific behavior:
+    each flat is bias-subtracted, normalized by ``np.median`` of that
+    bias-subtracted flat, accumulated with equal weight, and the resulting
+    master flat is renormalized by ``np.median(master_flat)``. The ``method``
+    argument is kept for API consistency; ``"median"`` is the supported
+    normalization behavior for this TP-compatible implementation.
+    """
+    if method != "median":
+        raise ValueError("make_master_flat follows doc/processing.py and supports method='median'")
+
+    flat_files = list(flat_files)
     if not flat_files:
         raise ValueError("flat_files must contain at least one FITS file")
 
     master_bias = np.asarray(master_bias, dtype=float)
-    normalized_flats = []
+    first_flat = _load_image_data(flat_files[0])
+    master_flat = np.zeros(np.shape(first_flat), dtype=float)
 
-    for path in flat_files:
-        flat_data = _load_image_data(path)
+    for index, path in enumerate(flat_files):
+        flat_data = first_flat if index == 0 else _load_image_data(path)
         bias_subtracted = flat_data - master_bias
-        flat_median = np.nanmedian(bias_subtracted)
+        flat_median = np.median(bias_subtracted)
         if not np.isfinite(flat_median) or flat_median == 0:
             raise ValueError("bias-subtracted flat frame has an invalid median")
-        normalized_flats.append(bias_subtracted / flat_median)
+        master_flat += bias_subtracted / flat_median / len(flat_files)
 
-    master_flat = _combine_frames(np.asarray(normalized_flats, dtype=float), method)
-    master_flat_median = np.nanmedian(master_flat)
+    master_flat_median = np.median(master_flat)
     if not np.isfinite(master_flat_median) or master_flat_median == 0:
         raise ValueError("master flat has an invalid median")
 
     master_flat = master_flat / master_flat_median
+
+    # Keep valid-pixel behavior identical to doc/processing.py, but prevent
+    # downstream division by zero or invalid flat values where they occur.
     invalid = ~np.isfinite(master_flat) | (master_flat == 0)
     if np.any(invalid):
         master_flat = master_flat.copy()
