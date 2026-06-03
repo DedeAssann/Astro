@@ -36,8 +36,8 @@ def aperture_flux(image, center, radius, background=0.0):
 
     y_center, x_center = center
     radius = float(radius)
-    if radius < 0:
-        raise ValueError("radius must be non-negative")
+    if not np.isfinite(radius) or radius < 0:
+        raise ValueError("radius must be finite and non-negative")
 
     background = float(background)
     yy, xx = np.indices(image.shape, dtype=float)
@@ -60,6 +60,9 @@ def aperture_growth_curve(image, center, radii, background=0.0):
         the same order they were provided.
     """
     radii = np.asarray(radii, dtype=float)
+    if not np.all(np.isfinite(radii)):
+        raise ValueError("radii must contain only finite values")
+
     fluxes = np.asarray(
         [aperture_flux(image, center, radius, background=background) for radius in radii],
         dtype=float,
@@ -70,9 +73,10 @@ def aperture_growth_curve(image, center, radii, background=0.0):
 def estimate_effective_radius(radii, fluxes):
     """Estimate the half-light/effective radius from a growth curve.
 
-    The effective radius is the radius containing half of the final total flux,
-    where the final flux is the flux at the largest supplied radius. Linear
-    interpolation is used between the two sampled radii that bracket this
+    The effective radius is the radius containing half of the maximum measured
+    total flux in the growth curve. This matches background-subtracted growth
+    curves that can decrease at large radii due to noise or oversubtraction.
+    Linear interpolation is used between the two sampled radii that bracket this
     half-flux value.
     """
     radii = np.asarray(radii, dtype=float)
@@ -88,7 +92,8 @@ def estimate_effective_radius(radii, fluxes):
     order = np.argsort(radii)
     sorted_radii = radii[order]
     sorted_fluxes = fluxes[order]
-    half_flux = sorted_fluxes[-1] / 2.0
+    total_flux = np.max(sorted_fluxes)
+    half_flux = total_flux / 2.0
 
     if sorted_fluxes[0] >= half_flux:
         return float(sorted_radii[0])
