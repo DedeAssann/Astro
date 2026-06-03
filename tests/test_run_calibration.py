@@ -66,11 +66,11 @@ maxiters: 5
     )
 
 
-def _write_compact_config(path, data_root, filters=("red", "green")):
+def _write_compact_config(path, data_root, filters=("red", "green"), object_name="M83"):
     filter_lines = "\n".join(f"  - {filter_name}" for filter_name in filters)
     path.write_text(
         f"""
-object_name: M83
+object_name: {object_name}
 data_root: {data_root}
 filters:
 {filter_lines}
@@ -271,14 +271,31 @@ def test_run_pipeline_routes_explicit_file_lists_to_explicit_output_dirs(tmp_pat
     assert all(path.exists() for path in output_dirs.values())
 
 
-def test_main_reports_missing_example_bias_directory(capsys):
-    exit_code = run_calibration.main(["--config", "configs/m83_example.yaml"])
+def test_main_reports_missing_bias_directory_from_temp_config(tmp_path, capsys, monkeypatch):
+    data_root = tmp_path / "data"
+    object_name = "MissingBiasObject"
+    object_dir = data_root / object_name
+    filter_name = "blue"
+    _touch(object_dir / "calibration" / "flats" / filter_name / "flat_blue.fits")
+    _touch(object_dir / "raw" / filter_name / "science_blue.fits")
+    config_path = tmp_path / "missing_bias_config.yaml"
+    _write_compact_config(config_path, data_root, filters=(filter_name,), object_name=object_name)
+
+    def fail_if_pipeline_imports_are_reached():
+        raise AssertionError("main() should stop during config validation for missing bias data")
+
+    monkeypatch.setattr(
+        run_calibration, "_get_pipeline_functions", fail_if_pipeline_imports_are_reached
+    )
+
+    exit_code = run_calibration.main(["--config", str(config_path)])
 
     captured = capsys.readouterr()
     assert exit_code == 1
     normalized_err = captured.err.replace("\\", "/")
+    expected_bias_dir = object_dir / "calibration" / "bias"
     assert "Required bias directory does not exist" in normalized_err
-    assert "data/M83/calibration/bias" in normalized_err
+    assert str(expected_bias_dir).replace("\\", "/") in normalized_err
 
 
 def test_validate_config_reports_missing_required_input_mode():
