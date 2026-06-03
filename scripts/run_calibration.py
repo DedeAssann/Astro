@@ -21,7 +21,8 @@ load_fits = None
 save_fits = None
 calibrate_and_stack = None
 
-REQUIRED_FIELDS = ("bias_files", "flat_files", "science_files", "output_dir")
+REQUIRED_FIELDS = ("bias_files", "flat_files", "science_files")
+OUTPUT_DIR_FIELDS = ("calibrated", "stacked", "figures", "analysis")
 
 
 def _parse_scalar(value: str) -> Any:
@@ -184,6 +185,9 @@ def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
         missing = ", ".join(missing_fields)
         raise ConfigError(f"Config is missing required field(s): {missing}")
 
+    if "output_dirs" not in config and "output_dir" not in config:
+        raise ConfigError("Config is missing required field: output_dirs or output_dir")
+
     bias_files = _require_non_empty_list(config, "bias_files")
     flat_files = _require_filter_mapping(config, "flat_files")
     science_files = _require_filter_mapping(config, "science_files")
@@ -200,9 +204,26 @@ def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
             details.append(f"missing science_files for filter(s): {', '.join(missing_science)}")
         raise ConfigError("Config filter mismatch: " + "; ".join(details))
 
-    output_dir = config["output_dir"]
-    if not isinstance(output_dir, str) or not output_dir:
-        raise ConfigError("Config field 'output_dir' must be a non-empty path string")
+    object_name = config.get("object_name")
+    if object_name is not None and (not isinstance(object_name, str) or not object_name):
+        raise ConfigError("Config field 'object_name' must be a non-empty string when provided")
+
+    output_dirs_value = config.get("output_dirs")
+    if output_dirs_value is not None:
+        if not isinstance(output_dirs_value, dict):
+            raise ConfigError("Config field 'output_dirs' must map output types to path strings")
+        output_dirs: dict[str, Path] = {}
+        for field in OUTPUT_DIR_FIELDS:
+            path_value = output_dirs_value.get(field)
+            if not isinstance(path_value, str) or not path_value:
+                raise ConfigError(f"Config field 'output_dirs.{field}' must be a non-empty path string")
+            output_dirs[field] = Path(path_value)
+    else:
+        output_dir = config["output_dir"]
+        if not isinstance(output_dir, str) or not output_dir:
+            raise ConfigError("Config field 'output_dir' must be a non-empty path string")
+        legacy_output_dir = Path(output_dir)
+        output_dirs = {field: legacy_output_dir for field in OUTPUT_DIR_FIELDS}
 
     align = config.get("align", True)
     if not isinstance(align, bool):
@@ -220,7 +241,8 @@ def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
         "bias_files": [Path(path) for path in bias_files],
         "flat_files": {name: [Path(path) for path in paths] for name, paths in flat_files.items()},
         "science_files": {name: [Path(path) for path in paths] for name, paths in science_files.items()},
-        "output_dir": Path(output_dir),
+        "object_name": object_name,
+        "output_dirs": output_dirs,
         "align": align,
         "sigma": sigma,
         "maxiters": maxiters,
@@ -273,14 +295,15 @@ def run_pipeline(config_path: Path) -> list[Path]:
     _ensure_input_files_exist(_input_paths(config))
     make_bias, make_flat, fits_loader, fits_saver, stack_science = _get_pipeline_functions()
 
-    output_dir = config["output_dir"]
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dirs = config["output_dirs"]
+    for output_dir in output_dirs.values():
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     written_files: list[Path] = []
 
     master_bias = make_bias(config["bias_files"])
     _bias_data, bias_header = fits_loader(config["bias_files"][0])
-    master_bias_path = output_dir / "master_bias.fits"
+    master_bias_path = output_dirs["calibrated"] / "master_bias.fits"
     fits_saver(master_bias, bias_header, master_bias_path)
     written_files.append(master_bias_path)
     print(f"Wrote {master_bias_path}")
@@ -288,7 +311,7 @@ def run_pipeline(config_path: Path) -> list[Path]:
     for filter_name in sorted(config["science_files"]):
         master_flat = make_flat(config["flat_files"][filter_name], master_bias)
         _flat_data, flat_header = fits_loader(config["flat_files"][filter_name][0])
-        master_flat_path = output_dir / f"master_flat_{filter_name}.fits"
+        master_flat_path = output_dirs["calibrated"] / f"master_flat_{filter_name}.fits"
         fits_saver(master_flat, flat_header, master_flat_path)
         written_files.append(master_flat_path)
         print(f"Wrote {master_flat_path}")
@@ -302,7 +325,7 @@ def run_pipeline(config_path: Path) -> list[Path]:
             maxiters=config["maxiters"],
         )
         _science_data, science_header = fits_loader(config["science_files"][filter_name][0])
-        stacked_path = output_dir / f"stacked_{filter_name}.fits"
+        stacked_path = output_dirs["stacked"] / f"stacked_{filter_name}.fits"
         fits_saver(stacked_image, science_header, stacked_path)
         written_files.append(stacked_path)
         print(f"Wrote {stacked_path}")
@@ -334,8 +357,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(
-        f"Pipeline complete. Wrote {len(written_files)} file(s) "
-        f"under {written_files[0].parent}."
+        f"Pipeline complete. Wrote {len(written_files)} file(s)."
     )
     return 0
 

@@ -72,7 +72,7 @@ conda activate tp-astro
 
 ## Usage example
 
-Edit `configs/m83_example.yaml` so each path points to local FITS files. The example config expects bias frames, per-filter flat frames, per-filter science frames, and an output directory.
+Create one YAML config per observed object, then edit that config so each path points to local FITS files for that object. The example `configs/m83_example.yaml` declares `object_name: M83`, points inputs into `data/M83/raw/` and `data/M83/calibration/`, and uses object-specific output directories under `data/M83/`.
 
 ```bash
 python scripts/run_calibration.py --config configs/m83_example.yaml
@@ -80,11 +80,25 @@ python scripts/run_calibration.py --config configs/m83_example.yaml
 
 For each configured science filter, the CLI writes:
 
-- `master_bias.fits`
-- `master_flat_<filter>.fits`
-- `stacked_<filter>.fits`
+- `master_bias.fits` to `output_dirs.calibrated`
+- `master_flat_<filter>.fits` to `output_dirs.calibrated`
+- `stacked_<filter>.fits` to `output_dirs.stacked`
 
-The example configuration writes these outputs under `results/m83/`.
+The object-based local data layout is:
+
+```text
+data/<OBJECT_NAME>/
+├── raw/
+├── calibration/
+│   ├── bias/
+│   └── flats/
+├── calibrated/
+├── stacked/
+├── figures/
+└── analysis/
+```
+
+For backward compatibility, older configs can omit `output_dirs` and keep using `output_dir`; in that case all generated FITS outputs are written to the single legacy directory.
 
 ## Testing
 
@@ -94,14 +108,14 @@ Run the full test suite from the repository root:
 pytest -q
 ```
 
-## Current V1 status
+## Current V2.1 status
 
-V1 is a working, modular baseline for small astronomy-image reduction experiments:
+V2.1 is a working, modular baseline for object-based astronomy-image reduction experiments:
 
 - FITS I/O, calibration, stacking/alignment, visualization, photometry, and galaxy-analysis helpers are implemented under `src/astro_image_lab/`.
 - The command-line calibration pipeline is driven by YAML configuration and performs input validation before reading FITS data.
 - The test suite covers the core numerical behavior and CLI validation paths.
-- The example M83 configuration documents the expected data layout, but the raw FITS data are not committed to the repository.
+- The example M83 configuration documents the object-based `data/M83/` layout, but the raw FITS data are not committed to the repository.
 - The pipeline is intentionally lightweight and explicit, favoring readable scientific steps over a large framework.
 
 ## Roadmap for V2
