@@ -2,6 +2,11 @@
 
 This document describes the V1 scientific workflow and software architecture for the TP Astro FITS calibration and galaxy-analysis pipeline.
 
+
+![Pipeline architecture](assets/pipeline_architecture.svg)
+
+The static SVG above is the main visual overview for portfolio and README use. The Mermaid diagrams below remain as text-based technical references.
+
 ## Scientific pipeline
 
 ```mermaid
