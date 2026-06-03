@@ -21,7 +21,10 @@ load_fits = None
 save_fits = None
 calibrate_and_stack = None
 
-REQUIRED_FIELDS = ("bias_files", "flat_files", "science_files", "output_dir")
+EXPLICIT_INPUT_FIELDS = ("bias_files", "flat_files", "science_files")
+COMPACT_INPUT_FIELDS = ("object_name", "data_root", "filters")
+OUTPUT_DIR_FIELDS = ("calibrated", "stacked", "figures", "analysis")
+FITS_EXTENSIONS = {".fits", ".fit", ".fts"}
 
 
 def _parse_scalar(value: str) -> Any:
@@ -177,16 +180,130 @@ def _require_filter_mapping(config: dict[str, Any], field: str) -> dict[str, lis
     return normalized
 
 
-def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
-    """Validate config shape and fill optional defaults."""
-    missing_fields = [field for field in REQUIRED_FIELDS if field not in config]
-    if missing_fields:
-        missing = ", ".join(missing_fields)
-        raise ConfigError(f"Config is missing required field(s): {missing}")
+def _require_non_empty_string(config: dict[str, Any], field: str) -> str:
+    """Return a required non-empty string field from the config."""
+    value = config.get(field)
+    if not isinstance(value, str) or not value:
+        raise ConfigError(f"Config field '{field}' must be a non-empty string")
+    return value
 
-    bias_files = _require_non_empty_list(config, "bias_files")
-    flat_files = _require_filter_mapping(config, "flat_files")
-    science_files = _require_filter_mapping(config, "science_files")
+
+def _require_filters(config: dict[str, Any]) -> list[str]:
+    """Return compact-config filters as a non-empty list of strings."""
+    value = config.get("filters")
+    if not isinstance(value, list) or not value:
+        raise ConfigError("Config field 'filters' must be a non-empty list of filter names")
+    if any(not isinstance(item, str) or not item for item in value):
+        raise ConfigError("Config field 'filters' must contain only non-empty strings")
+    return value
+
+
+def _discover_fits_files(directory: Path, label: str) -> list[Path]:
+    """Return sorted FITS-like files in ``directory`` or raise a clear config error."""
+    if not directory.exists():
+        raise ConfigError(f"Required {label} directory does not exist: {directory}")
+    if not directory.is_dir():
+        raise ConfigError(f"Required {label} path is not a directory: {directory}")
+
+    fits_files = sorted(
+        path
+        for path in directory.glob("*")
+        if path.is_file() and path.suffix.lower() in FITS_EXTENSIONS
+    )
+    if not fits_files:
+        extensions = ", ".join(sorted(FITS_EXTENSIONS))
+        raise ConfigError(f"No FITS files ({extensions}) found in required {label} directory: {directory}")
+    return fits_files
+
+
+def _infer_input_files(
+    object_dir: Path, filters: list[str]
+) -> tuple[list[Path], dict[str, list[Path]], dict[str, list[Path]]]:
+    """Discover input FITS files from the standard object directory layout."""
+    bias_files = _discover_fits_files(object_dir / "calibration" / "bias", "bias")
+    flat_files = {
+        filter_name: _discover_fits_files(
+            object_dir / "calibration" / "flats" / filter_name,
+            f"flat for filter '{filter_name}'",
+        )
+        for filter_name in filters
+    }
+    science_files = {
+        filter_name: _discover_fits_files(
+            object_dir / "raw" / filter_name,
+            f"science for filter '{filter_name}'",
+        )
+        for filter_name in filters
+    }
+    return bias_files, flat_files, science_files
+
+
+def _normalize_output_dirs(config: dict[str, Any], object_dir: Path | None) -> dict[str, Path]:
+    """Return configured or inferred output directories."""
+    output_dirs_value = config.get("output_dirs")
+    if output_dirs_value is not None:
+        if not isinstance(output_dirs_value, dict):
+            raise ConfigError("Config field 'output_dirs' must map output types to path strings")
+        output_dirs: dict[str, Path] = {}
+        for field in OUTPUT_DIR_FIELDS:
+            path_value = output_dirs_value.get(field)
+            if not isinstance(path_value, str) or not path_value:
+                raise ConfigError(f"Config field 'output_dirs.{field}' must be a non-empty path string")
+            output_dirs[field] = Path(path_value)
+        return output_dirs
+
+    output_dir = config.get("output_dir")
+    if output_dir is not None:
+        if not isinstance(output_dir, str) or not output_dir:
+            raise ConfigError("Config field 'output_dir' must be a non-empty path string")
+        legacy_output_dir = Path(output_dir)
+        return {field: legacy_output_dir for field in OUTPUT_DIR_FIELDS}
+
+    if object_dir is None:
+        raise ConfigError("Config must provide output_dirs, output_dir, or compact object_name/data_root")
+    return {field: object_dir / field for field in OUTPUT_DIR_FIELDS}
+
+
+def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Validate config shape, discover compact inputs, and fill optional defaults."""
+    has_explicit_inputs = all(field in config for field in EXPLICIT_INPUT_FIELDS)
+    has_any_explicit_input = any(field in config for field in EXPLICIT_INPUT_FIELDS)
+    has_compact_inputs = all(field in config for field in COMPACT_INPUT_FIELDS)
+
+    object_name = config.get("object_name")
+    if object_name is not None and (not isinstance(object_name, str) or not object_name):
+        raise ConfigError("Config field 'object_name' must be a non-empty string when provided")
+
+    object_dir: Path | None = None
+    if has_compact_inputs:
+        data_root = _require_non_empty_string(config, "data_root")
+        filters = _require_filters(config)
+        object_dir = Path(data_root) / _require_non_empty_string(config, "object_name")
+
+    if has_explicit_inputs:
+        bias_files = [Path(path) for path in _require_non_empty_list(config, "bias_files")]
+        flat_files = {
+            name: [Path(path) for path in paths]
+            for name, paths in _require_filter_mapping(config, "flat_files").items()
+        }
+        science_files = {
+            name: [Path(path) for path in paths]
+            for name, paths in _require_filter_mapping(config, "science_files").items()
+        }
+    elif has_any_explicit_input:
+        missing_fields = [field for field in EXPLICIT_INPUT_FIELDS if field not in config]
+        missing = ", ".join(missing_fields)
+        raise ConfigError(
+            "Config must provide all explicit input fields "
+            f"(missing: {missing}) or use compact object_name/data_root/filters discovery"
+        )
+    elif has_compact_inputs:
+        bias_files, flat_files, science_files = _infer_input_files(object_dir, filters)
+    else:
+        raise ConfigError(
+            "Config must provide either explicit bias_files, flat_files, science_files "
+            "or compact object_name, data_root, filters"
+        )
 
     flat_filters = set(flat_files)
     science_filters = set(science_files)
@@ -200,9 +317,7 @@ def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
             details.append(f"missing science_files for filter(s): {', '.join(missing_science)}")
         raise ConfigError("Config filter mismatch: " + "; ".join(details))
 
-    output_dir = config["output_dir"]
-    if not isinstance(output_dir, str) or not output_dir:
-        raise ConfigError("Config field 'output_dir' must be a non-empty path string")
+    output_dirs = _normalize_output_dirs(config, object_dir)
 
     align = config.get("align", True)
     if not isinstance(align, bool):
@@ -217,10 +332,12 @@ def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
         raise ConfigError("Config field 'maxiters' must be a non-negative integer or null")
 
     return {
-        "bias_files": [Path(path) for path in bias_files],
-        "flat_files": {name: [Path(path) for path in paths] for name, paths in flat_files.items()},
-        "science_files": {name: [Path(path) for path in paths] for name, paths in science_files.items()},
-        "output_dir": Path(output_dir),
+        "bias_files": bias_files,
+        "flat_files": flat_files,
+        "science_files": science_files,
+        "object_name": object_name,
+        "object_dir": object_dir,
+        "output_dirs": output_dirs,
         "align": align,
         "sigma": sigma,
         "maxiters": maxiters,
@@ -273,14 +390,15 @@ def run_pipeline(config_path: Path) -> list[Path]:
     _ensure_input_files_exist(_input_paths(config))
     make_bias, make_flat, fits_loader, fits_saver, stack_science = _get_pipeline_functions()
 
-    output_dir = config["output_dir"]
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dirs = config["output_dirs"]
+    for output_dir in output_dirs.values():
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     written_files: list[Path] = []
 
     master_bias = make_bias(config["bias_files"])
     _bias_data, bias_header = fits_loader(config["bias_files"][0])
-    master_bias_path = output_dir / "master_bias.fits"
+    master_bias_path = output_dirs["calibrated"] / "master_bias.fits"
     fits_saver(master_bias, bias_header, master_bias_path)
     written_files.append(master_bias_path)
     print(f"Wrote {master_bias_path}")
@@ -288,7 +406,7 @@ def run_pipeline(config_path: Path) -> list[Path]:
     for filter_name in sorted(config["science_files"]):
         master_flat = make_flat(config["flat_files"][filter_name], master_bias)
         _flat_data, flat_header = fits_loader(config["flat_files"][filter_name][0])
-        master_flat_path = output_dir / f"master_flat_{filter_name}.fits"
+        master_flat_path = output_dirs["calibrated"] / f"master_flat_{filter_name}.fits"
         fits_saver(master_flat, flat_header, master_flat_path)
         written_files.append(master_flat_path)
         print(f"Wrote {master_flat_path}")
@@ -302,7 +420,7 @@ def run_pipeline(config_path: Path) -> list[Path]:
             maxiters=config["maxiters"],
         )
         _science_data, science_header = fits_loader(config["science_files"][filter_name][0])
-        stacked_path = output_dir / f"stacked_{filter_name}.fits"
+        stacked_path = output_dirs["stacked"] / f"stacked_{filter_name}.fits"
         fits_saver(stacked_image, science_header, stacked_path)
         written_files.append(stacked_path)
         print(f"Wrote {stacked_path}")
@@ -334,8 +452,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(
-        f"Pipeline complete. Wrote {len(written_files)} file(s) "
-        f"under {written_files[0].parent}."
+        f"Pipeline complete. Wrote {len(written_files)} file(s)."
     )
     return 0
 

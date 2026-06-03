@@ -26,7 +26,8 @@ The scientific goal of V1 is to provide a transparent teaching and portfolio pip
 ```text
 .
 ├── configs/                 # Example YAML pipeline configurations
-│   └── m83_example.yaml
+│   ├── m83_example.yaml
+│   └── m83_explicit_example.yaml
 ├── docs/                    # Project architecture and design documentation
 │   └── architecture.md
 ├── doc/                     # Original teaching notebooks, PDFs, and legacy processing notes
@@ -72,19 +73,49 @@ conda activate tp-astro
 
 ## Usage example
 
-Edit `configs/m83_example.yaml` so each path points to local FITS files. The example config expects bias frames, per-filter flat frames, per-filter science frames, and an output directory.
+Create one YAML config per observed object. The compact example `configs/m83_example.yaml` needs only the object name, data root, and filters; `scripts/run_calibration.py` discovers FITS inputs from the standard object directory layout.
 
 ```bash
 python scripts/run_calibration.py --config configs/m83_example.yaml
 ```
 
-For each configured science filter, the CLI writes:
+Compact config mode looks like this:
 
-- `master_bias.fits`
-- `master_flat_<filter>.fits`
-- `stacked_<filter>.fits`
+```yaml
+object_name: M83
+data_root: data
+filters:
+  - red
+  - green
+  - blue
+```
 
-The example configuration writes these outputs under `results/m83/`.
+The inferred local data layout is:
+
+```text
+data/<OBJECT_NAME>/
+├── raw/
+│   └── <filter>/
+│       └── *.fits
+├── calibration/
+│   ├── bias/
+│   │   └── *.fits
+│   └── flats/
+│       └── <filter>/
+│           └── *.fits
+├── calibrated/
+├── stacked/
+├── figures/
+└── analysis/
+```
+
+The CLI accepts `.fits`, `.fit`, and `.fts` filenames, sorts discovered lists for reproducibility, and creates output directories when needed. For each configured science filter, it writes:
+
+- `master_bias.fits` to `data/<OBJECT_NAME>/calibrated/`
+- `master_flat_<filter>.fits` to `data/<OBJECT_NAME>/calibrated/`
+- `stacked_<filter>.fits` to `data/<OBJECT_NAME>/stacked/`
+
+Explicit config mode is still supported for custom file selections. Use `configs/m83_explicit_example.yaml` as a template with `bias_files`, `flat_files`, `science_files`, and optional `output_dirs`. For backward compatibility, older configs can omit `output_dirs` and keep using `output_dir`; in that case all generated FITS outputs are written to the single legacy directory.
 
 ## Testing
 
@@ -94,14 +125,14 @@ Run the full test suite from the repository root:
 pytest -q
 ```
 
-## Current V1 status
+## Current V2.2 status
 
-V1 is a working, modular baseline for small astronomy-image reduction experiments:
+V2.2 is a working, modular baseline for object-based astronomy-image reduction experiments:
 
 - FITS I/O, calibration, stacking/alignment, visualization, photometry, and galaxy-analysis helpers are implemented under `src/astro_image_lab/`.
 - The command-line calibration pipeline is driven by YAML configuration and performs input validation before reading FITS data.
 - The test suite covers the core numerical behavior and CLI validation paths.
-- The example M83 configuration documents the expected data layout, but the raw FITS data are not committed to the repository.
+- The example M83 configuration documents the object-based `data/M83/` layout, but the raw FITS data are not committed to the repository.
 - The pipeline is intentionally lightweight and explicit, favoring readable scientific steps over a large framework.
 
 ## Roadmap for V2
