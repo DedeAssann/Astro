@@ -95,20 +95,23 @@ def _create_compact_tree(tmp_path, filters=("red", "green")):
     files = {
         "bias": [
             _touch(object_dir / "calibration" / "bias" / "bias_002.FIT"),
-            _touch(object_dir / "calibration" / "bias" / "bias_001.fits"),
+            _touch(object_dir / "calibration" / "bias" / "bias_001.fit"),
         ],
         "flat": {},
         "science": {},
     }
+    _touch(object_dir / "calibration" / "bias" / "bias_notes.txt")
     for filter_name in filters:
         files["flat"][filter_name] = [
-            _touch(object_dir / "calibration" / "flats" / filter_name / f"flat_b_{filter_name}.fts"),
-            _touch(object_dir / "calibration" / "flats" / filter_name / f"flat_a_{filter_name}.fits"),
+            _touch(object_dir / "calibration" / "flats" / filter_name / f"flat_{filter_name}_002.fits"),
+            _touch(object_dir / "calibration" / "flats" / filter_name / f"flat_{filter_name}_001.fts"),
         ]
         files["science"][filter_name] = [
-            _touch(object_dir / "raw" / filter_name / f"science_b_{filter_name}.FIT"),
-            _touch(object_dir / "raw" / filter_name / f"science_a_{filter_name}.fits"),
+            _touch(object_dir / "raw" / filter_name / f"science_{filter_name}_002.fit"),
+            _touch(object_dir / "raw" / filter_name / f"science_{filter_name}_001.FITS"),
         ]
+        _touch(object_dir / "calibration" / "flats" / filter_name / f"flat_{filter_name}_notes.txt")
+        _touch(object_dir / "raw" / filter_name / f"science_{filter_name}_notes.txt")
     return data_root, object_dir, files
 
 

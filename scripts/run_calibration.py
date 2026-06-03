@@ -15,6 +15,8 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from astro_image_lab.io import SUPPORTED_FITS_EXTENSIONS, discover_fits_files
+
 make_master_bias = None
 make_master_flat = None
 load_fits = None
@@ -24,7 +26,6 @@ calibrate_and_stack = None
 EXPLICIT_INPUT_FIELDS = ("bias_files", "flat_files", "science_files")
 COMPACT_INPUT_FIELDS = ("object_name", "data_root", "filters")
 OUTPUT_DIR_FIELDS = ("calibrated", "stacked", "figures", "analysis")
-FITS_EXTENSIONS = {".fits", ".fit", ".fts"}
 
 
 def _parse_scalar(value: str) -> Any:
@@ -205,13 +206,9 @@ def _discover_fits_files(directory: Path, label: str) -> list[Path]:
     if not directory.is_dir():
         raise ConfigError(f"Required {label} path is not a directory: {directory}")
 
-    fits_files = sorted(
-        path
-        for path in directory.glob("*")
-        if path.is_file() and path.suffix.lower() in FITS_EXTENSIONS
-    )
+    fits_files = discover_fits_files(directory)
     if not fits_files:
-        extensions = ", ".join(sorted(FITS_EXTENSIONS))
+        extensions = ", ".join(sorted(SUPPORTED_FITS_EXTENSIONS))
         raise ConfigError(f"No FITS files ({extensions}) found in required {label} directory: {directory}")
     return fits_files
 

@@ -16,11 +16,13 @@ sys.modules[spec.name] = make_demo_figures
 spec.loader.exec_module(make_demo_figures)
 
 
-def _touch_stacked(data_root, object_name="M83", filters=("red",)):
+def _touch_stacked(data_root, object_name="M83", filters=("red",), extensions=None):
     stacked_dir = data_root / object_name / "stacked"
     stacked_dir.mkdir(parents=True, exist_ok=True)
+    extensions = extensions or {}
     for filter_name in filters:
-        (stacked_dir / f"stacked_{filter_name}.fits").write_text(
+        extension = extensions.get(filter_name, ".fits")
+        (stacked_dir / f"stacked_{filter_name}{extension}").write_text(
             "synthetic placeholder; tests mock FITS loading\n",
             encoding="utf-8",
         )
@@ -46,7 +48,11 @@ def test_object_argument_discovers_stacked_fits_and_writes_channel_outputs(
     capsys,
 ):
     data_root = tmp_path / "data"
-    _touch_stacked(data_root, filters=("red", "green"))
+    _touch_stacked(
+        data_root,
+        filters=("red", "green"),
+        extensions={"red": ".fit", "green": ".fts"},
+    )
     loaded = _mock_load_fits(monkeypatch)
 
     written = make_demo_figures.make_demo_figures("M83", data_root=data_root)
@@ -59,11 +65,35 @@ def test_object_argument_discovers_stacked_fits_and_writes_channel_outputs(
     ]
     assert written == expected
     assert loaded == [
-        data_root / "M83" / "stacked" / "stacked_green.fits",
-        data_root / "M83" / "stacked" / "stacked_red.fits",
+        data_root / "M83" / "stacked" / "stacked_green.fts",
+        data_root / "M83" / "stacked" / "stacked_red.fit",
     ]
     assert all(path.is_file() for path in expected)
     assert capsys.readouterr().out.splitlines() == [str(path) for path in expected]
+
+
+def test_discovers_and_processes_stacked_images_with_mixed_fits_extensions(
+    tmp_path,
+    monkeypatch,
+):
+    data_root = tmp_path / "data"
+    stacked_dir = _touch_stacked(
+        data_root,
+        filters=("red", "green", "blue"),
+        extensions={"red": ".fit", "green": ".fts", "blue": ".FITS"},
+    )
+    (stacked_dir / "stacked_notes.txt").write_text("ignore me", encoding="utf-8")
+    (stacked_dir / "unstacked_red.fits").write_text("ignore me", encoding="utf-8")
+    loaded = _mock_load_fits(monkeypatch)
+
+    written = make_demo_figures.make_demo_figures("M83", data_root=data_root)
+
+    assert loaded == [
+        data_root / "M83" / "stacked" / "stacked_blue.FITS",
+        data_root / "M83" / "stacked" / "stacked_green.fts",
+        data_root / "M83" / "stacked" / "stacked_red.fit",
+    ]
+    assert data_root / "M83" / "figures" / "rgb_composite.png" in written
 
 
 def test_missing_stacked_directory_gives_clear_error(tmp_path):
@@ -120,7 +150,11 @@ def test_rgb_composite_is_generated_only_when_red_green_and_blue_exist(
 
 def test_cli_filters_limit_generated_outputs(tmp_path, monkeypatch, capsys):
     data_root = tmp_path / "data"
-    _touch_stacked(data_root, filters=("blue", "green", "red"))
+    _touch_stacked(
+        data_root,
+        filters=("blue", "green", "red"),
+        extensions={"blue": ".FIT", "green": ".fts", "red": ".fits"},
+    )
     _mock_load_fits(monkeypatch)
 
     exit_code = make_demo_figures.main(

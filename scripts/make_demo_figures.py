@@ -17,33 +17,33 @@ if str(SRC_DIR) not in sys.path:
 import matplotlib.pyplot as plt
 
 from astro_image_lab import visualization
-from astro_image_lab.io import load_fits
+from astro_image_lab.io import discover_fits_files, load_fits
 
 
 class DemoFigureError(ValueError):
     """Raised when demo figure inputs cannot be resolved."""
 
 
-def _stacked_path(data_root: Path, object_name: str, filter_name: str) -> Path:
-    """Return the expected stacked FITS path for an object/filter pair."""
-    return data_root / object_name / "stacked" / f"stacked_{filter_name}.fits"
-
-
-def _discover_filters(stacked_dir: Path) -> list[str]:
-    """Discover filters from ``stacked_*.fits`` files in a stacked directory."""
+def _discover_stacked_files(stacked_dir: Path) -> dict[str, Path]:
+    """Discover stacked FITS files and map filter names to file paths."""
     if not stacked_dir.exists():
         raise DemoFigureError(f"Stacked directory does not exist: {stacked_dir}")
     if not stacked_dir.is_dir():
         raise DemoFigureError(f"Stacked path is not a directory: {stacked_dir}")
 
-    filters = sorted(
-        path.stem.removeprefix("stacked_")
-        for path in stacked_dir.glob("stacked_*.fits")
-        if path.is_file()
-    )
-    if not filters:
+    stacked_files = {
+        path.stem.removeprefix("stacked_"): path
+        for path in discover_fits_files(stacked_dir)
+        if path.stem.startswith("stacked_")
+    }
+    if not stacked_files:
         raise DemoFigureError(f"No stacked FITS files found in {stacked_dir}")
-    return filters
+    return stacked_files
+
+
+def _discover_filters(stacked_dir: Path) -> list[str]:
+    """Discover filters from supported ``stacked_*`` FITS files."""
+    return sorted(_discover_stacked_files(stacked_dir))
 
 
 def _resolve_stacked_files(
@@ -53,20 +53,21 @@ def _resolve_stacked_files(
 ) -> dict[str, Path]:
     """Resolve filter names to stacked FITS files for demo figure generation."""
     stacked_dir = data_root / object_name / "stacked"
-    selected_filters = filters if filters is not None else _discover_filters(stacked_dir)
+    discovered_files = _discover_stacked_files(stacked_dir)
+    selected_filters = filters if filters is not None else sorted(discovered_files)
 
     stacked_files: dict[str, Path] = {}
-    missing: list[Path] = []
+    missing: list[str] = []
     for filter_name in selected_filters:
-        stacked_file = _stacked_path(data_root, object_name, filter_name)
-        if stacked_file.is_file():
-            stacked_files[filter_name] = stacked_file
+        stacked_file = discovered_files.get(filter_name)
+        if stacked_file is None:
+            missing.append(filter_name)
         else:
-            missing.append(stacked_file)
+            stacked_files[filter_name] = stacked_file
 
     if missing:
-        missing_paths = ", ".join(str(path) for path in missing)
-        raise DemoFigureError(f"Stacked FITS file(s) not found: {missing_paths}")
+        missing_filters = ", ".join(missing)
+        raise DemoFigureError(f"Stacked FITS file(s) not found for filter(s): {missing_filters}")
     if not stacked_files:
         raise DemoFigureError(f"No stacked FITS files found in {stacked_dir}")
     return stacked_files
@@ -88,7 +89,7 @@ def make_demo_figures(
         ``data``.
     filters : list[str] or None, optional
         Optional list of filters to render. If omitted, filters are discovered
-        from files matching ``stacked_*.fits``.
+        from supported FITS files whose stems start with ``stacked_``.
 
     Returns
     -------

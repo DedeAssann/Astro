@@ -63,28 +63,28 @@ V2.2 organizes local data by observed object and uses one YAML config per object
 data/M83/
 ├── raw/
 │   ├── red/
-│   │   └── *.fits
+│   │   └── *.{fits,fit,fts}
 │   ├── green/
-│   │   └── *.fits
+│   │   └── *.{fits,fit,fts}
 │   └── blue/
-│       └── *.fits
+│       └── *.{fits,fit,fts}
 ├── calibration/
 │   ├── bias/
-│   │   └── *.fits
+│   │   └── *.{fits,fit,fts}
 │   └── flats/
 │       ├── red/
-│       │   └── *.fits
+│       │   └── *.{fits,fit,fts}
 │       ├── green/
-│       │   └── *.fits
+│       │   └── *.{fits,fit,fts}
 │       └── blue/
-│           └── *.fits
+│           └── *.{fits,fit,fts}
 ├── calibrated/
 ├── stacked/
 ├── figures/
 └── analysis/
 ```
 
-The CLI accepts `.fits`, `.fit`, and `.fts` files and sorts discovered lists for reproducibility. Compact configs infer `output_dirs.calibrated`, `output_dirs.stacked`, `output_dirs.figures`, and `output_dirs.analysis` from `data_root/object_name`. Explicit `output_dirs` override those inferred directories; older V1 configs without `output_dirs` remain supported by setting `output_dir`, which is used for all generated FITS files. `master_bias.fits` and `master_flat_<filter>.fits` are written to the calibrated directory, while `stacked_<filter>.fits` is written to the stacked directory.
+The CLI accepts `.fits`, `.fit`, and `.fts` files case-insensitively and sorts discovered lists for reproducibility. Compact configs infer `output_dirs.calibrated`, `output_dirs.stacked`, `output_dirs.figures`, and `output_dirs.analysis` from `data_root/object_name`. Explicit `output_dirs` override those inferred directories; older V1 configs without `output_dirs` remain supported by setting `output_dir`, which is used for all generated FITS files. `master_bias.fits` and `master_flat_<filter>.fits` are written to the calibrated directory, while `stacked_<filter>.fits` is written to the stacked directory.
 
 ## Module responsibility table
 
@@ -92,7 +92,7 @@ The CLI accepts `.fits`, `.fit`, and `.fts` files and sorts discovered lists for
 | --- | --- | --- |
 | `scripts/run_calibration.py` | Command-line entry point; loads one object YAML config, validates explicit or compact discovery fields, checks inputs, creates output directories, orchestrates master calibration products and stacked outputs. | `master_bias.fits`, `master_flat_<filter>.fits`, `stacked_<filter>.fits` |
 | `scripts/make_demo_figures.py` | Post-pipeline demo-figure entry point; reads object-layout stacked FITS outputs, creates the figures directory, writes per-filter previews and histograms, and optionally writes an RGB composite. | `stacked_<filter>.png`, `histogram_<filter>.png`, `rgb_composite.png` |
-| `src/astro_image_lab/io.py` | FITS I/O boundary; reads primary-HDU image data and headers, writes data/header pairs back to FITS. | NumPy-like image arrays, FITS headers, FITS files |
+| `src/astro_image_lab/io.py` | FITS I/O boundary; centralizes supported FITS extension checks and non-recursive file discovery, reads primary-HDU image data and headers, and writes data/header pairs back to FITS. | Sorted FITS path lists, NumPy-like image arrays, FITS headers, FITS files |
 | `src/astro_image_lab/calibration.py` | Builds master bias and master flats; applies `(science - master_bias) / master_flat` calibration. | Master calibration arrays and calibrated science arrays |
 | `src/astro_image_lab/stacking.py` | Median-normalizes calibrated science images, optionally registers images with `astroalign`, sigma-clips stacks, and averages surviving pixels. | Stacked `float32` science images |
 | `src/astro_image_lab/visualization.py` | Percentile scaling and Matplotlib-based inspection plots; RGB array creation from stacked channels. | Figures, PNG files, RGB arrays |
@@ -110,17 +110,17 @@ The CLI accepts `.fits`, `.fit`, and `.fts` files and sorts discovered lists for
 | Science calibration | Per-filter raw science FITS files, master bias, matching master flat. | In-memory calibrated science arrays. | Invalid or zero flat pixels become `NaN` downstream. |
 | Normalization and alignment | Calibrated science arrays; optional `astroalign` registration. | Normalized and optionally registered stack cube. | The first science image is retained as the alignment reference. |
 | Sigma-clipped stacking | Stack cube, sigma threshold, maximum iterations. | `output_dirs.stacked/stacked_<filter>.fits` images. | Uses Astropy sigma clipping when available, with a NumPy fallback. Legacy `output_dir` configs write these files to the single legacy directory. |
-| Visualization | Stacked FITS data or arrays. | Inspection figures, histograms, comparisons, RGB composites. | Plot helpers can save PNGs when an output path is supplied. `scripts/make_demo_figures.py` provides the object-layout CLI for rendering `data/<OBJECT_NAME>/stacked/stacked_*.fits` into `data/<OBJECT_NAME>/figures/`. |
+| Visualization | Stacked FITS data or arrays. | Inspection figures, histograms, comparisons, RGB composites. | Plot helpers can save PNGs when an output path is supplied. `scripts/make_demo_figures.py` provides the object-layout CLI for discovering supported FITS files in `data/<OBJECT_NAME>/stacked/` whose stems start with `stacked_` and rendering them into `data/<OBJECT_NAME>/figures/`. |
 | Photometry and galaxy analysis | Stacked image arrays, aperture center/radii, background estimate, distance and pixel scale metadata. | Fluxes, growth curves, effective radius, absolute magnitudes, physical sizes. | V1 provides lightweight NumPy calculations rather than a full photometry framework. |
 
 ## Data flow through the system
 
 1. Each observed target has its own YAML file. Compact configs describe the object name, data root, filters, and stacking parameters; explicit configs can still list every bias, flat, and science FITS path.
-2. The CLI validates the config before importing heavier scientific helpers. In compact mode it checks required directories, discovers `.fits`, `.fit`, and `.fts` files with `pathlib`, sorts them, and raises clear errors for missing directories or empty required FITS directories. It also creates all configured or inferred output directories when they are missing.
+2. The CLI validates the config before importing heavier scientific helpers. In compact mode it checks required directories, discovers `.fits`, `.fit`, and `.fts` files case-insensitively with the shared FITS I/O helpers, sorts them, and raises clear errors for missing directories or empty required FITS directories. It also creates all configured or inferred output directories when they are missing.
 3. Bias frames are loaded through the FITS I/O layer and combined into a master bias. The CLI writes that product with the header from the first bias frame into the inferred or explicit calibrated directory, or the legacy `output_dir`.
 4. For each filter, flat frames are loaded, bias-subtracted, normalized by their median response, averaged, renormalized, and written as a filter-specific master flat into the inferred or explicit calibrated directory, or the legacy `output_dir`.
 5. For the same filter, each science frame is loaded, calibrated with the master bias and matching master flat, then normalized by its median to place images on a common relative scale.
 6. If alignment is enabled, the first normalized science image is used as the reference and later images are registered to it with `astroalign`. If alignment is disabled, images are stacked in their original pixel coordinates.
 7. The normalized image cube is sigma-clipped along the exposure axis and averaged into a final stacked image, which is saved as `stacked_<filter>.fits` in `output_dirs.stacked` or the legacy `output_dir`.
-8. Stacked products can then feed visualization helpers for review figures and RGB composites, or photometry helpers for aperture fluxes, growth curves, effective-radius estimates, and angular-to-physical size conversions. The demo-figure CLI is intentionally post-processing only: it discovers or accepts stacked filters, loads only `stacked_<filter>.fits`, writes PNGs under `figures/`, and never requires raw/calibration inputs or reruns reduction.
+8. Stacked products can then feed visualization helpers for review figures and RGB composites, or photometry helpers for aperture fluxes, growth curves, effective-radius estimates, and angular-to-physical size conversions. The demo-figure CLI is intentionally post-processing only: it discovers or accepts stacked filters, loads only supported FITS files whose stems are `stacked_<filter>`, writes PNGs under `figures/`, and never requires raw/calibration inputs or reruns reduction.
 9. Tests exercise the scientific assumptions and guard against regressions in calibration formulas, stacking behavior, plotting helpers, photometry math, and CLI validation.
