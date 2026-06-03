@@ -72,7 +72,15 @@ def stack_images(image_stack, sigma=2, maxiters=10):
     return final_image.astype(np.float32, copy=False)
 
 
-def calibrate_and_stack(science_files, master_bias, master_flat, align=True, min_area=12):
+def calibrate_and_stack(
+    science_files,
+    master_bias,
+    master_flat,
+    align=True,
+    min_area=12,
+    sigma=2,
+    maxiters=10,
+):
     """Load, calibrate, optionally align, and stack science FITS images.
 
     Each science frame is loaded with :func:`astro_image_lab.io.load_fits`,
@@ -83,7 +91,9 @@ def calibrate_and_stack(science_files, master_bias, master_flat, align=True, min
     When ``align=True``, the first calibrated and normalized science image is
     used as the registration reference and every subsequent image is aligned to
     it with ``astroalign.register(..., min_area=min_area)``. The first image is
-    not skipped, correcting the indexing bug in ``doc/processing.py``.
+    not skipped, correcting the indexing bug in ``doc/processing.py``. The
+    ``sigma`` and ``maxiters`` arguments are forwarded to
+    :func:`astro_image_lab.stacking.stack_images`.
     """
     science_files = list(science_files)
     if not science_files:
@@ -113,4 +123,4 @@ def calibrate_and_stack(science_files, master_bias, master_flat, align=True, min
         else:
             normalized_images.append(normalized)
 
-    return stack_images(np.asarray(normalized_images, dtype=float))
+    return stack_images(np.asarray(normalized_images, dtype=float), sigma=sigma, maxiters=maxiters)
