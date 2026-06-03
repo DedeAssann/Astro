@@ -73,6 +73,23 @@ def _resolve_stacked_files(
     return stacked_files
 
 
+def _aligned_channel_path(stacked_dir: Path, filter_name: str) -> Path:
+    """Return the expected aligned-channel FITS path for a filter."""
+    return stacked_dir / "aligned_channels" / f"stacked_{filter_name}_aligned.fits"
+
+
+def _resolve_rgb_channel_files(stacked_dir: Path, stacked_files: dict[str, Path]) -> dict[str, Path]:
+    """Resolve RGB source files, preferring aligned channels when present."""
+    rgb_files: dict[str, Path] = {}
+    for filter_name in ("red", "green", "blue"):
+        aligned_path = _aligned_channel_path(stacked_dir, filter_name)
+        if aligned_path.exists():
+            rgb_files[filter_name] = aligned_path
+        else:
+            rgb_files[filter_name] = stacked_files[filter_name]
+    return rgb_files
+
+
 def make_demo_figures(
     object_name: str,
     data_root: Path | str = Path("data"),
@@ -97,16 +114,14 @@ def make_demo_figures(
         Paths written, in print order.
     """
     data_root = Path(data_root)
+    stacked_dir = data_root / object_name / "stacked"
     stacked_files = _resolve_stacked_files(data_root, object_name, filters)
     figures_dir = data_root / object_name / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
 
     written_paths: list[Path] = []
-    channel_data: dict[str, object] = {}
-
     for filter_name, stacked_file in sorted(stacked_files.items()):
         data, _header = load_fits(stacked_file)
-        channel_data[filter_name] = data
 
         image_path = figures_dir / f"stacked_{filter_name}.png"
         fig = visualization.plot_image(
@@ -128,11 +143,19 @@ def make_demo_figures(
         written_paths.append(histogram_path)
         print(histogram_path)
 
-    if {"red", "green", "blue"}.issubset(channel_data):
+    if {"red", "green", "blue"}.issubset(stacked_files):
+        rgb_files = _resolve_rgb_channel_files(stacked_dir, stacked_files)
+        rgb_channel_data = {}
+        for filter_name in ("red", "green", "blue"):
+            rgb_channel_data[filter_name], _header = load_fits(rgb_files[filter_name])
+        source_summary = ", ".join(
+            f"{filter_name}={rgb_files[filter_name]}" for filter_name in ("red", "green", "blue")
+        )
+        print(f"RGB composite sources: {source_summary}")
         rgb = visualization.make_rgb_image(
-            channel_data["red"],
-            channel_data["green"],
-            channel_data["blue"],
+            rgb_channel_data["red"],
+            rgb_channel_data["green"],
+            rgb_channel_data["blue"],
         )
         rgb_path = figures_dir / "rgb_composite.png"
         plt.imsave(rgb_path, rgb, origin="lower")
