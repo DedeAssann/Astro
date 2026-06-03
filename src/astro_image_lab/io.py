@@ -3,6 +3,32 @@
 from pathlib import Path
 
 
+SUPPORTED_FITS_EXTENSIONS = {".fits", ".fit", ".fts"}
+
+
+def is_fits_file(path):
+    """Return True when ``path`` has a supported FITS file extension.
+
+    Supported extensions are matched case-insensitively and include
+    ``.fits``, ``.fit``, and ``.fts``.
+    """
+    return Path(path).suffix.lower() in SUPPORTED_FITS_EXTENSIONS
+
+
+def discover_fits_files(directory):
+    """Return sorted FITS files directly inside ``directory``.
+
+    The search is non-recursive and accepts all extensions listed in
+    :data:`SUPPORTED_FITS_EXTENSIONS`, case-insensitively. Non-files and
+    non-FITS paths are ignored.
+    """
+    return sorted(
+        path
+        for path in Path(directory).iterdir()
+        if path.is_file() and is_fits_file(path)
+    )
+
+
 def load_fits(path):
     """Load the primary image data and header from a FITS file.
 

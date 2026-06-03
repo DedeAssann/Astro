@@ -97,20 +97,20 @@ The inferred local data layout is:
 data/<OBJECT_NAME>/
 ├── raw/
 │   └── <filter>/
-│       └── *.fits
+│       └── *.{fits,fit,fts}
 ├── calibration/
 │   ├── bias/
-│   │   └── *.fits
+│   │   └── *.{fits,fit,fts}
 │   └── flats/
 │       └── <filter>/
-│           └── *.fits
+│           └── *.{fits,fit,fts}
 ├── calibrated/
 ├── stacked/
 ├── figures/
 └── analysis/
 ```
 
-The CLI accepts `.fits`, `.fit`, and `.fts` filenames, sorts discovered lists for reproducibility, and creates output directories when needed. For each configured science filter, it writes:
+The CLI accepts `.fits`, `.fit`, and `.fts` filenames case-insensitively, sorts discovered lists for reproducibility, and creates output directories when needed. For each configured science filter, it writes:
 
 - `master_bias.fits` to `data/<OBJECT_NAME>/calibrated/`
 - `master_flat_<filter>.fits` to `data/<OBJECT_NAME>/calibrated/`
@@ -122,12 +122,12 @@ Generate PNG demo figures from those stacked FITS products with:
 python scripts/make_demo_figures.py --object M83
 ```
 
-By default, the demo-figure script reads `data/M83/stacked/stacked_*.fits`, creates `data/M83/figures/` if needed, and prints every PNG path it writes. It saves one channel preview and one finite-pixel histogram per discovered filter:
+By default, the demo-figure script discovers supported FITS files in `data/M83/stacked/`, keeps files whose stems start with `stacked_`, creates `data/M83/figures/` if needed, and prints every PNG path it writes. It saves one channel preview and one finite-pixel histogram per discovered filter:
 
 - `stacked_<filter>.png` to `data/<OBJECT_NAME>/figures/`
 - `histogram_<filter>.png` to `data/<OBJECT_NAME>/figures/`
 
-When `stacked_red.fits`, `stacked_green.fits`, and `stacked_blue.fits` are all available in the selected inputs, it also writes `rgb_composite.png` using the package RGB visualization helper. Use `--data-root` for a different object-layout root, or `--filters blue green red` to render a specific filter subset without rerunning calibration.
+When `stacked_red`, `stacked_green`, and `stacked_blue` files with supported FITS extensions are all available in the selected inputs, it also writes `rgb_composite.png` using the package RGB visualization helper. Use `--data-root` for a different object-layout root, or `--filters blue green red` to render a specific filter subset without rerunning calibration.
 
 Explicit config mode is still supported for custom file selections. Use `configs/m83_explicit_example.yaml` as a template with `bias_files`, `flat_files`, `science_files`, and optional `output_dirs`. For backward compatibility, older configs can omit `output_dirs` and keep using `output_dir`; in that case all generated FITS outputs are written to the single legacy directory.
 
