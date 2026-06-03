@@ -34,7 +34,8 @@ The scientific goal of V1 is to provide a transparent teaching and portfolio pip
 ├── Images/                  # Reference figures and example astronomy images
 ├── notebooks/               # Exploratory notebooks
 ├── scripts/                 # Command-line entry points
-│   └── run_calibration.py
+│   ├── run_calibration.py
+│   └── make_demo_figures.py
 ├── src/astro_image_lab/     # Reusable package modules
 │   ├── calibration.py
 │   ├── io.py
@@ -114,6 +115,19 @@ The CLI accepts `.fits`, `.fit`, and `.fts` filenames, sorts discovered lists fo
 - `master_bias.fits` to `data/<OBJECT_NAME>/calibrated/`
 - `master_flat_<filter>.fits` to `data/<OBJECT_NAME>/calibrated/`
 - `stacked_<filter>.fits` to `data/<OBJECT_NAME>/stacked/`
+
+Generate PNG demo figures from those stacked FITS products with:
+
+```bash
+python scripts/make_demo_figures.py --object M83
+```
+
+By default, the demo-figure script reads `data/M83/stacked/stacked_*.fits`, creates `data/M83/figures/` if needed, and prints every PNG path it writes. It saves one channel preview and one finite-pixel histogram per discovered filter:
+
+- `stacked_<filter>.png` to `data/<OBJECT_NAME>/figures/`
+- `histogram_<filter>.png` to `data/<OBJECT_NAME>/figures/`
+
+When `stacked_red.fits`, `stacked_green.fits`, and `stacked_blue.fits` are all available in the selected inputs, it also writes `rgb_composite.png` using the package RGB visualization helper. Use `--data-root` for a different object-layout root, or `--filters blue green red` to render a specific filter subset without rerunning calibration.
 
 Explicit config mode is still supported for custom file selections. Use `configs/m83_explicit_example.yaml` as a template with `bias_files`, `flat_files`, `science_files`, and optional `output_dirs`. For backward compatibility, older configs can omit `output_dirs` and keep using `output_dir`; in that case all generated FITS outputs are written to the single legacy directory.
 
