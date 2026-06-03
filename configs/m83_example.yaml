@@ -5,5 +5,12 @@ filters:
   - green
   - blue
 align: true
+alignment:
+  enabled: true
+  method: astroalign
+  min_area: 12
+  detection_sigma: null
+  reference: first
+  fail_policy: raise
 sigma: 2
 maxiters: 10

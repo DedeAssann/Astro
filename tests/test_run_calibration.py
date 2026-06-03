@@ -1,4 +1,5 @@
 from pathlib import Path
+import csv
 import importlib.util
 import sys
 
@@ -137,15 +138,47 @@ def _mock_pipeline_helpers(monkeypatch):
         calls.setdefault("flat_args", {})[Path(paths[0]).parent.name] = (paths, bias)
         return master_flat
 
-    def fake_calibrate_and_stack(science_files, bias, flat, align, sigma, maxiters):
+    def fake_calibrate_and_stack(
+        science_files,
+        bias,
+        flat,
+        align,
+        min_area,
+        sigma,
+        maxiters,
+        return_alignment_report=False,
+        filter_name=None,
+        fail_policy="raise",
+        alignment_method="astroalign",
+        detection_sigma=None,
+    ):
         calls.setdefault("stack_args", {})[Path(science_files[0]).parent.name] = (
             science_files,
             bias,
             flat,
             align,
+            min_area,
             sigma,
             maxiters,
+            return_alignment_report,
+            filter_name,
+            fail_policy,
+            alignment_method,
+            detection_sigma,
         )
+        records = [
+            {
+                "filter": filter_name or "",
+                "file_path": str(science_files[0]),
+                "index": 0,
+                "status": "skipped" if not align else "reference",
+                "error": "",
+                "method": alignment_method if align else "",
+                "min_area": min_area,
+            }
+        ]
+        if return_alignment_report:
+            return stacked, records
         return stacked
 
     saved = []
@@ -182,8 +215,14 @@ def test_run_pipeline_discovers_compact_object_layout(tmp_path, monkeypatch):
             master_bias,
             master_flat,
             False,
+            12,
             3,
             5,
+            True,
+            filter_name,
+            "raise",
+            "astroalign",
+            None,
         )
     assert written == [
         object_dir / "calibrated" / "master_bias.fits",
@@ -191,8 +230,9 @@ def test_run_pipeline_discovers_compact_object_layout(tmp_path, monkeypatch):
         object_dir / "stacked" / "stacked_green.fits",
         object_dir / "calibrated" / "master_flat_red.fits",
         object_dir / "stacked" / "stacked_red.fits",
+        object_dir / "analysis" / "alignment_report.csv",
     ]
-    assert [item[2] for item in saved] == written
+    assert [item[2] for item in saved] == written[:-1]
     assert all((object_dir / dirname).exists() for dirname in ("calibrated", "stacked", "figures", "analysis"))
 
 
@@ -244,11 +284,25 @@ def test_run_pipeline_writes_expected_outputs_with_legacy_output_dir(tmp_path, m
         output_dir / "master_bias.fits",
         output_dir / "master_flat_red.fits",
         output_dir / "stacked_red.fits",
+        output_dir / "alignment_report.csv",
     ]
-    assert [item[2] for item in saved] == written
+    assert [item[2] for item in saved] == written[:-1]
     assert calls["bias_paths"] == [files["bias"]]
     assert calls["flat_args"][tmp_path.name] == ([files["flat"]], master_bias)
-    assert calls["stack_args"][tmp_path.name] == ([files["science"]], master_bias, _master_flat, False, 3, 5)
+    assert calls["stack_args"][tmp_path.name] == (
+        [files["science"]],
+        master_bias,
+        _master_flat,
+        False,
+        12,
+        3,
+        5,
+        True,
+        "red",
+        "raise",
+        "astroalign",
+        None,
+    )
 
 
 def test_run_pipeline_routes_explicit_file_lists_to_explicit_output_dirs(tmp_path, monkeypatch):
@@ -269,9 +323,55 @@ def test_run_pipeline_routes_explicit_file_lists_to_explicit_output_dirs(tmp_pat
         output_dirs["calibrated"] / "master_bias.fits",
         output_dirs["calibrated"] / "master_flat_red.fits",
         output_dirs["stacked"] / "stacked_red.fits",
+        output_dirs["analysis"] / "alignment_report.csv",
     ]
-    assert [item[2] for item in saved] == written
+    assert [item[2] for item in saved] == written[:-1]
     assert all(path.exists() for path in output_dirs.values())
+
+
+def test_validate_config_alignment_enabled_overrides_legacy_align(tmp_path):
+    files = _input_files(tmp_path)
+    config = {
+        "bias_files": [str(files["bias"])],
+        "flat_files": {"red": [str(files["flat"])]},
+        "science_files": {"red": [str(files["science"])]},
+        "output_dir": str(tmp_path / "out"),
+        "align": False,
+        "alignment": {"enabled": True, "min_area": 21, "fail_policy": "skip"},
+    }
+
+    validated = run_calibration._validate_config(config)
+
+    assert validated["align"] is True
+    assert validated["alignment"]["enabled"] is True
+    assert validated["alignment"]["min_area"] == 21
+    assert validated["alignment"]["fail_policy"] == "skip"
+
+
+def test_run_pipeline_writes_alignment_report_csv(tmp_path, monkeypatch):
+    files = _input_files(tmp_path)
+    output_dir = tmp_path / "results"
+    config_path = tmp_path / "config.yaml"
+    _write_legacy_config(config_path, output_dir, files)
+    _mock_pipeline_helpers(monkeypatch)
+
+    written = run_calibration.run_pipeline(config_path)
+
+    report_path = output_dir / "alignment_report.csv"
+    assert report_path in written
+    with report_path.open("r", encoding="utf-8", newline="") as report_file:
+        rows = list(csv.DictReader(report_file))
+    assert rows == [
+        {
+            "filter": "red",
+            "file_path": str(files["science"]),
+            "index": "0",
+            "status": "skipped",
+            "error": "",
+            "method": "",
+            "min_area": "12",
+        }
+    ]
 
 
 def test_main_reports_missing_bias_directory_from_temp_config(tmp_path, capsys, monkeypatch):
