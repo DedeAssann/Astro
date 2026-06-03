@@ -1,0 +1,11 @@
+name: tp-astro
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10
+  - numpy>=1.24
+  - astropy>=5.0
+  - astroalign>=2.5
+  - matplotlib>=3.7
+  - pyyaml>=6.0
+  - pytest>=7.0
