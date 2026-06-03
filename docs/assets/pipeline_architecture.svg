@@ -1,0 +1,226 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="920" viewBox="0 0 1400 920" role="img" aria-labelledby="title desc">
+  <title id="title">TP Astro V1 pipeline architecture</title>
+  <desc id="desc">A polished architecture diagram showing inputs, Python pipeline modules, and scientific outputs for the TP Astro FITS calibration and galaxy analysis workflow.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#071426"/>
+      <stop offset="0.48" stop-color="#0b1f3b"/>
+      <stop offset="1" stop-color="#111827"/>
+    </linearGradient>
+    <radialGradient id="nebula" cx="52%" cy="35%" r="65%">
+      <stop offset="0" stop-color="#38bdf8" stop-opacity="0.20"/>
+      <stop offset="0.34" stop-color="#a78bfa" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#020617" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#020617" flood-opacity="0.40"/>
+    </filter>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <marker id="arrowCyan" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#38bdf8"/>
+    </marker>
+    <marker id="arrowViolet" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#a78bfa"/>
+    </marker>
+    <marker id="arrowAmber" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#fbbf24"/>
+    </marker>
+    <style>
+      .title { font: 800 38px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #f8fafc; letter-spacing: .3px; }
+      .subtitle { font: 500 17px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #cbd5e1; }
+      .lane { font: 800 15px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #e2e8f0; letter-spacing: 1.8px; }
+      .label { font: 800 18px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #f8fafc; }
+      .small { font: 500 13px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #cbd5e1; }
+      .tiny { font: 600 11px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #94a3b8; letter-spacing: .5px; }
+      .code { font: 650 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #dbeafe; }
+      .pillText { font: 800 11px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #071426; letter-spacing: .8px; }
+      .panel { fill: rgba(15, 23, 42, .68); stroke: rgba(148, 163, 184, .24); stroke-width: 1.2; }
+      .fileCard { fill: rgba(14, 165, 233, .12); stroke: #38bdf8; stroke-opacity: .82; stroke-width: 1.4; }
+      .moduleCard { fill: rgba(124, 58, 237, .14); stroke: #a78bfa; stroke-opacity: .84; stroke-width: 1.4; }
+      .outputCard { fill: rgba(16, 185, 129, .13); stroke: #34d399; stroke-opacity: .84; stroke-width: 1.4; }
+      .orchestrator { fill: rgba(251, 191, 36, .16); stroke: #fbbf24; stroke-width: 1.8; }
+      .flow { fill: none; stroke: #38bdf8; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrowCyan); }
+      .flowSoft { fill: none; stroke: #a78bfa; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrowViolet); }
+      .flowOut { fill: none; stroke: #34d399; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrowCyan); }
+      .flowAmber { fill: none; stroke: #fbbf24; stroke-width: 2.8; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrowAmber); }
+    </style>
+  </defs>
+
+  <rect width="1400" height="920" fill="url(#bg)"/>
+  <rect width="1400" height="920" fill="url(#nebula)"/>
+
+  <!-- Star field: deterministic, self-contained decoration. -->
+  <g opacity="0.72">
+    <circle cx="86" cy="88" r="1.4" fill="#e0f2fe"/><circle cx="178" cy="164" r="1" fill="#f8fafc"/><circle cx="317" cy="75" r="1.2" fill="#bae6fd"/>
+    <circle cx="477" cy="132" r="1" fill="#f8fafc"/><circle cx="615" cy="70" r="1.5" fill="#ddd6fe"/><circle cx="760" cy="142" r="1" fill="#e0f2fe"/>
+    <circle cx="915" cy="82" r="1.3" fill="#f8fafc"/><circle cx="1065" cy="148" r="1" fill="#bae6fd"/><circle cx="1257" cy="77" r="1.4" fill="#f8fafc"/>
+    <circle cx="1334" cy="215" r="1" fill="#ddd6fe"/><circle cx="63" cy="342" r="1" fill="#bae6fd"/><circle cx="128" cy="650" r="1.3" fill="#f8fafc"/>
+    <circle cx="331" cy="862" r="1" fill="#e0f2fe"/><circle cx="576" cy="805" r="1.4" fill="#f8fafc"/><circle cx="820" cy="854" r="1" fill="#ddd6fe"/>
+    <circle cx="1095" cy="819" r="1.5" fill="#bae6fd"/><circle cx="1304" cy="742" r="1" fill="#f8fafc"/>
+  </g>
+
+  <text x="70" y="74" class="title">TP Astro V1 Pipeline Architecture</text>
+  <text x="70" y="105" class="subtitle">YAML-driven FITS calibration, stacking, visualization, and lightweight galaxy analysis</text>
+
+  <!-- Legend -->
+  <g transform="translate(922 50)">
+    <rect x="0" y="0" width="408" height="66" rx="18" class="panel"/>
+    <rect x="24" y="21" width="14" height="14" rx="4" fill="rgba(14,165,233,.25)" stroke="#38bdf8"/>
+    <text x="47" y="33" class="tiny">DATA FILES</text>
+    <rect x="146" y="21" width="14" height="14" rx="4" fill="rgba(124,58,237,.25)" stroke="#a78bfa"/>
+    <text x="169" y="33" class="tiny">PYTHON MODULES</text>
+    <rect x="297" y="21" width="14" height="14" rx="4" fill="rgba(16,185,129,.25)" stroke="#34d399"/>
+    <text x="320" y="33" class="tiny">OUTPUTS</text>
+  </g>
+
+  <!-- Lane panels -->
+  <g filter="url(#softShadow)">
+    <rect x="60" y="145" width="330" height="690" rx="28" class="panel"/>
+    <rect x="430" y="145" width="540" height="690" rx="28" class="panel"/>
+    <rect x="1010" y="145" width="330" height="690" rx="28" class="panel"/>
+  </g>
+  <text x="90" y="184" class="lane">01 INPUTS</text>
+  <text x="460" y="184" class="lane">02 PIPELINE MODULES</text>
+  <text x="1040" y="184" class="lane">03 SCIENCE OUTPUTS</text>
+
+  <!-- Inputs -->
+  <g filter="url(#softShadow)">
+    <g transform="translate(92 220)">
+      <rect width="266" height="96" rx="20" class="fileCard"/>
+      <rect x="22" y="22" width="48" height="52" rx="10" fill="#0ea5e9" opacity=".22" stroke="#38bdf8"/>
+      <path d="M58 22 L70 34 L58 34 Z" fill="#38bdf8" opacity=".7"/>
+      <text x="88" y="39" class="label">YAML config</text>
+      <text x="88" y="62" class="code">configs/m83_example.yaml</text>
+      <rect x="88" y="73" width="105" height="17" rx="8.5" fill="#38bdf8"/>
+      <text x="101" y="86" class="pillText">RUN SETTINGS</text>
+    </g>
+    <g transform="translate(92 348)">
+      <rect width="266" height="96" rx="20" class="fileCard"/>
+      <circle cx="46" cy="48" r="24" fill="#38bdf8" opacity=".18" stroke="#38bdf8"/>
+      <text x="34" y="53" class="label">B</text>
+      <text x="88" y="39" class="label">Bias FITS frames</text>
+      <text x="88" y="62" class="small">Electronic detector offset</text>
+      <text x="88" y="82" class="code">*.fits</text>
+    </g>
+    <g transform="translate(92 476)">
+      <rect width="266" height="110" rx="20" class="fileCard"/>
+      <circle cx="46" cy="52" r="25" fill="#38bdf8" opacity=".18" stroke="#38bdf8"/>
+      <text x="34" y="58" class="label">F</text>
+      <text x="88" y="38" class="label">Flat FITS frames</text>
+      <text x="88" y="61" class="small">Grouped by filter</text>
+      <text x="88" y="82" class="code">red / green / blue</text>
+    </g>
+    <g transform="translate(92 620)">
+      <rect width="266" height="118" rx="20" class="fileCard"/>
+      <circle cx="46" cy="55" r="27" fill="#38bdf8" opacity=".18" stroke="#38bdf8"/>
+      <text x="34" y="61" class="label">S</text>
+      <text x="88" y="38" class="label">Science FITS frames</text>
+      <text x="88" y="61" class="small">Raw target exposures</text>
+      <text x="88" y="82" class="code">per filter</text>
+      <text x="88" y="101" class="small">Example target: M83</text>
+    </g>
+  </g>
+
+  <!-- Modules -->
+  <g filter="url(#softShadow)">
+    <g transform="translate(472 220)">
+      <rect width="456" height="96" rx="22" class="orchestrator"/>
+      <text x="28" y="39" class="label">CLI orchestrator</text>
+      <text x="28" y="63" class="code">scripts/run_calibration.py</text>
+      <text x="266" y="39" class="small">validates config</text>
+      <text x="266" y="61" class="small">coordinates per-filter products</text>
+    </g>
+    <g transform="translate(472 348)">
+      <rect width="210" height="102" rx="20" class="moduleCard"/>
+      <text x="24" y="37" class="label">FITS I/O</text>
+      <text x="24" y="60" class="code">io.py</text>
+      <text x="24" y="81" class="small">load_fits / save_fits</text>
+    </g>
+    <g transform="translate(718 348)">
+      <rect width="210" height="102" rx="20" class="moduleCard"/>
+      <text x="24" y="37" class="label">Calibration</text>
+      <text x="24" y="60" class="code">calibration.py</text>
+      <text x="24" y="81" class="small">bias, flats, science</text>
+    </g>
+    <g transform="translate(472 496)">
+      <rect width="456" height="118" rx="20" class="moduleCard"/>
+      <text x="28" y="38" class="label">Stacking workflow</text>
+      <text x="28" y="62" class="code">stacking.py</text>
+      <text x="28" y="86" class="small">median normalization → optional alignment → sigma-clipped mean</text>
+    </g>
+    <g transform="translate(472 662)">
+      <rect width="210" height="110" rx="20" class="moduleCard"/>
+      <text x="24" y="38" class="label">Visualization</text>
+      <text x="24" y="61" class="code">visualization.py</text>
+      <text x="24" y="83" class="small">plots, histograms, RGB</text>
+    </g>
+    <g transform="translate(718 662)">
+      <rect width="210" height="110" rx="20" class="moduleCard"/>
+      <text x="24" y="38" class="label">Photometry</text>
+      <text x="24" y="61" class="code">photometry.py</text>
+      <text x="24" y="83" class="small">flux, radius, kpc scale</text>
+    </g>
+  </g>
+
+  <!-- Outputs -->
+  <g filter="url(#softShadow)">
+    <g transform="translate(1042 230)">
+      <rect width="266" height="86" rx="20" class="outputCard"/>
+      <text x="26" y="35" class="label">Master bias</text>
+      <text x="26" y="60" class="code">master_bias.fits</text>
+    </g>
+    <g transform="translate(1042 354)">
+      <rect width="266" height="90" rx="20" class="outputCard"/>
+      <text x="26" y="36" class="label">Master flats</text>
+      <text x="26" y="61" class="code">master_flat_&lt;filter&gt;.fits</text>
+    </g>
+    <g transform="translate(1042 492)">
+      <rect width="266" height="92" rx="20" class="outputCard"/>
+      <text x="26" y="37" class="label">Stacked science</text>
+      <text x="26" y="62" class="code">stacked_&lt;filter&gt;.fits</text>
+    </g>
+    <g transform="translate(1042 644)">
+      <rect width="266" height="78" rx="20" class="outputCard"/>
+      <text x="26" y="34" class="label">Figures / RGB</text>
+      <text x="26" y="57" class="small">PNG figures, composites</text>
+    </g>
+    <g transform="translate(1042 752)">
+      <rect width="266" height="78" rx="20" class="outputCard"/>
+      <text x="26" y="34" class="label">Galaxy metrics</text>
+      <text x="26" y="57" class="small">fluxes, radius, physical scales</text>
+    </g>
+  </g>
+
+  <!-- Primary arrows from inputs to orchestrator -->
+  <path d="M358 268 C405 268 420 268 472 268" class="flow"/>
+  <path d="M358 396 C405 396 405 287 472 287" class="flow" opacity=".82"/>
+  <path d="M358 531 C405 531 405 300 472 300" class="flow" opacity=".72"/>
+  <path d="M358 679 C410 679 410 313 472 313" class="flow" opacity=".68"/>
+
+  <!-- Internal module dependencies -->
+  <path d="M700 316 C700 333 619 329 589 348" class="flowAmber"/>
+  <path d="M730 316 C752 331 779 331 808 348" class="flowAmber"/>
+  <path d="M823 450 C823 474 810 474 810 496" class="flowSoft"/>
+  <path d="M577 450 C577 475 590 475 590 496" class="flowSoft"/>
+  <path d="M700 614 C700 639 577 638 577 662" class="flowSoft"/>
+  <path d="M700 614 C700 639 823 638 823 662" class="flowSoft"/>
+
+  <!-- Output arrows -->
+  <path d="M928 268 C984 268 993 273 1042 273" class="flowOut"/>
+  <path d="M928 399 C984 399 994 399 1042 399" class="flowOut"/>
+  <path d="M928 555 C986 555 994 540 1042 540" class="flowOut"/>
+  <path d="M682 717 C870 717 907 683 1042 683" class="flowOut" opacity=".83"/>
+  <path d="M928 717 C992 717 992 791 1042 791" class="flowOut" opacity=".83"/>
+
+  <!-- Stage badges -->
+  <g transform="translate(497 794)">
+    <rect width="407" height="30" rx="15" fill="rgba(56,189,248,.13)" stroke="rgba(56,189,248,.45)"/>
+    <text x="24" y="20" class="tiny">V1 SCOPE: calibration + stacking CLI; visualization and analysis helpers consume stacked products</text>
+  </g>
+</svg>
