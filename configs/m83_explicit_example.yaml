@@ -1,0 +1,29 @@
+object_name: M83
+
+bias_files:
+  - data/M83/calibration/bias/example_bias_001.fits
+
+flat_files:
+  red:
+    - data/M83/calibration/flats/red/red_flat_001.fits
+  green:
+    - data/M83/calibration/flats/green/green_flat_001.fits
+  blue:
+    - data/M83/calibration/flats/blue/blue_flat_001.fits
+
+science_files:
+  red:
+    - data/M83/raw/red/red_001.fits
+  green:
+    - data/M83/raw/green/green_001.fits
+  blue:
+    - data/M83/raw/blue/blue_001.fits
+
+output_dirs:
+  calibrated: data/M83/calibrated
+  stacked: data/M83/stacked
+  figures: data/M83/figures
+  analysis: data/M83/analysis
+align: true
+sigma: 2
+maxiters: 10

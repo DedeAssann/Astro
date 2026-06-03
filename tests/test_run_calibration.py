@@ -66,15 +66,58 @@ maxiters: 5
     )
 
 
-def _input_files(tmp_path):
+def _write_compact_config(path, data_root, filters=("red", "green")):
+    filter_lines = "\n".join(f"  - {filter_name}" for filter_name in filters)
+    path.write_text(
+        f"""
+object_name: M83
+data_root: {data_root}
+filters:
+{filter_lines}
+align: false
+sigma: 3
+maxiters: 5
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _touch(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("placeholder", encoding="utf-8")
+    return path
+
+
+def _create_compact_tree(tmp_path, filters=("red", "green")):
+    data_root = tmp_path / "data"
+    object_dir = data_root / "M83"
     files = {
-        "bias": tmp_path / "bias.fits",
-        "flat": tmp_path / "flat.fits",
-        "science": tmp_path / "science.fits",
+        "bias": [
+            _touch(object_dir / "calibration" / "bias" / "bias_002.FIT"),
+            _touch(object_dir / "calibration" / "bias" / "bias_001.fits"),
+        ],
+        "flat": {},
+        "science": {},
     }
-    for path in files.values():
-        path.write_text("placeholder", encoding="utf-8")
-    return files
+    for filter_name in filters:
+        files["flat"][filter_name] = [
+            _touch(object_dir / "calibration" / "flats" / filter_name / f"flat_b_{filter_name}.fts"),
+            _touch(object_dir / "calibration" / "flats" / filter_name / f"flat_a_{filter_name}.fits"),
+        ]
+        files["science"][filter_name] = [
+            _touch(object_dir / "raw" / filter_name / f"science_b_{filter_name}.FIT"),
+            _touch(object_dir / "raw" / filter_name / f"science_a_{filter_name}.fits"),
+        ]
+    return data_root, object_dir, files
+
+
+def _input_files(tmp_path):
+    return {
+        "bias": _touch(tmp_path / "bias.fits"),
+        "flat": _touch(tmp_path / "flat.fits"),
+        "science": _touch(tmp_path / "science.fits"),
+    }
 
 
 def _mock_pipeline_helpers(monkeypatch):
@@ -88,11 +131,18 @@ def _mock_pipeline_helpers(monkeypatch):
         return master_bias
 
     def fake_make_master_flat(paths, bias):
-        calls["flat_args"] = (paths, bias)
+        calls.setdefault("flat_args", {})[Path(paths[0]).parent.name] = (paths, bias)
         return master_flat
 
     def fake_calibrate_and_stack(science_files, bias, flat, align, sigma, maxiters):
-        calls["stack_args"] = (science_files, bias, flat, align, sigma, maxiters)
+        calls.setdefault("stack_args", {})[Path(science_files[0]).parent.name] = (
+            science_files,
+            bias,
+            flat,
+            align,
+            sigma,
+            maxiters,
+        )
         return stacked
 
     saved = []
@@ -113,6 +163,71 @@ def _mock_pipeline_helpers(monkeypatch):
     return calls, saved, master_bias, master_flat
 
 
+def test_run_pipeline_discovers_compact_object_layout(tmp_path, monkeypatch):
+    data_root, object_dir, files = _create_compact_tree(tmp_path)
+    config_path = tmp_path / "config.yaml"
+    _write_compact_config(config_path, data_root)
+    calls, saved, master_bias, master_flat = _mock_pipeline_helpers(monkeypatch)
+
+    written = run_calibration.run_pipeline(config_path)
+
+    assert calls["bias_paths"] == sorted(files["bias"])
+    for filter_name in ("red", "green"):
+        assert calls["flat_args"][filter_name] == (sorted(files["flat"][filter_name]), master_bias)
+        assert calls["stack_args"][filter_name] == (
+            sorted(files["science"][filter_name]),
+            master_bias,
+            master_flat,
+            False,
+            3,
+            5,
+        )
+    assert written == [
+        object_dir / "calibrated" / "master_bias.fits",
+        object_dir / "calibrated" / "master_flat_green.fits",
+        object_dir / "stacked" / "stacked_green.fits",
+        object_dir / "calibrated" / "master_flat_red.fits",
+        object_dir / "stacked" / "stacked_red.fits",
+    ]
+    assert [item[2] for item in saved] == written
+    assert all((object_dir / dirname).exists() for dirname in ("calibrated", "stacked", "figures", "analysis"))
+
+
+def test_validate_config_reports_missing_bias_directory(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    _write_compact_config(config_path, tmp_path / "data", filters=("red",))
+
+    with pytest.raises(run_calibration.ConfigError, match="Required bias directory does not exist"):
+        run_calibration._validate_config(run_calibration._load_yaml_config(config_path))
+
+
+def test_validate_config_reports_missing_flat_directory_for_filter(tmp_path):
+    data_root, object_dir, _files = _create_compact_tree(tmp_path, filters=("red",))
+    config_path = tmp_path / "config.yaml"
+    _write_compact_config(config_path, data_root, filters=("red", "blue"))
+    (object_dir / "raw" / "blue").mkdir(parents=True)
+    _touch(object_dir / "raw" / "blue" / "science_blue.fits")
+
+    with pytest.raises(
+        run_calibration.ConfigError,
+        match="Required flat for filter 'blue' directory does not exist",
+    ):
+        run_calibration._validate_config(run_calibration._load_yaml_config(config_path))
+
+
+def test_validate_config_reports_missing_science_directory_for_filter(tmp_path):
+    data_root, object_dir, _files = _create_compact_tree(tmp_path, filters=("red",))
+    config_path = tmp_path / "config.yaml"
+    _write_compact_config(config_path, data_root, filters=("red", "blue"))
+    _touch(object_dir / "calibration" / "flats" / "blue" / "flat_blue.fits")
+
+    with pytest.raises(
+        run_calibration.ConfigError,
+        match="Required science for filter 'blue' directory does not exist",
+    ):
+        run_calibration._validate_config(run_calibration._load_yaml_config(config_path))
+
+
 def test_run_pipeline_writes_expected_outputs_with_legacy_output_dir(tmp_path, monkeypatch):
     files = _input_files(tmp_path)
     output_dir = tmp_path / "results"
@@ -129,11 +244,11 @@ def test_run_pipeline_writes_expected_outputs_with_legacy_output_dir(tmp_path, m
     ]
     assert [item[2] for item in saved] == written
     assert calls["bias_paths"] == [files["bias"]]
-    assert calls["flat_args"] == ([files["flat"]], master_bias)
-    assert calls["stack_args"] == ([files["science"]], master_bias, _master_flat, False, 3, 5)
+    assert calls["flat_args"][tmp_path.name] == ([files["flat"]], master_bias)
+    assert calls["stack_args"][tmp_path.name] == ([files["science"]], master_bias, _master_flat, False, 3, 5)
 
 
-def test_run_pipeline_routes_products_to_object_output_dirs(tmp_path, monkeypatch):
+def test_run_pipeline_routes_explicit_file_lists_to_explicit_output_dirs(tmp_path, monkeypatch):
     files = _input_files(tmp_path)
     output_dirs = {
         "calibrated": tmp_path / "data" / "M83" / "calibrated",
@@ -156,16 +271,16 @@ def test_run_pipeline_routes_products_to_object_output_dirs(tmp_path, monkeypatc
     assert all(path.exists() for path in output_dirs.values())
 
 
-def test_main_reports_missing_example_files(capsys):
+def test_main_reports_missing_example_bias_directory(capsys):
     exit_code = run_calibration.main(["--config", "configs/m83_example.yaml"])
 
     captured = capsys.readouterr()
     assert exit_code == 1
     normalized_err = captured.err.replace("\\", "/")
-    assert "Missing input FITS file(s)" in normalized_err
-    assert "data/M83/calibration/bias/example_bias_001.fits" in normalized_err
+    assert "Required bias directory does not exist" in normalized_err
+    assert "data/M83/calibration/bias" in normalized_err
 
 
-def test_validate_config_reports_missing_required_field():
-    with pytest.raises(run_calibration.ConfigError, match="missing required field"):
+def test_validate_config_reports_missing_required_input_mode():
+    with pytest.raises(run_calibration.ConfigError, match="all explicit input fields"):
         run_calibration._validate_config({"bias_files": ["bias.fits"]})

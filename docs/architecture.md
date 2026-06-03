@@ -1,6 +1,6 @@
 # TP Astro Architecture
 
-This document describes the V2.1 scientific workflow and software architecture for the TP Astro FITS calibration and galaxy-analysis pipeline.
+This document describes the V2.2 scientific workflow and software architecture for the TP Astro FITS calibration and galaxy-analysis pipeline.
 
 
 ![Pipeline architecture](assets/pipeline_architecture.svg)
@@ -57,27 +57,40 @@ flowchart LR
 
 ## Object-based data layout
 
-V2.1 organizes local data by observed object and uses one YAML config per object. For M83, the recommended directory structure is:
+V2.2 organizes local data by observed object and uses one YAML config per object. The compact config mode provides `object_name`, `data_root`, and `filters`, then the CLI discovers FITS inputs from this standard structure:
 
 ```text
 data/M83/
 ├── raw/
+│   ├── red/
+│   │   └── *.fits
+│   ├── green/
+│   │   └── *.fits
+│   └── blue/
+│       └── *.fits
 ├── calibration/
 │   ├── bias/
+│   │   └── *.fits
 │   └── flats/
+│       ├── red/
+│       │   └── *.fits
+│       ├── green/
+│       │   └── *.fits
+│       └── blue/
+│           └── *.fits
 ├── calibrated/
 ├── stacked/
 ├── figures/
 └── analysis/
 ```
 
-The `output_dirs` mapping in the object config points to the writable products directories. `master_bias.fits` and `master_flat_<filter>.fits` are written to `output_dirs.calibrated`; `stacked_<filter>.fits` is written to `output_dirs.stacked`; `output_dirs.figures` and `output_dirs.analysis` are created for downstream visualization and analysis products. Older V1 configs without `output_dirs` remain supported by setting `output_dir`, which is used for all generated FITS files.
+The CLI accepts `.fits`, `.fit`, and `.fts` files and sorts discovered lists for reproducibility. Compact configs infer `output_dirs.calibrated`, `output_dirs.stacked`, `output_dirs.figures`, and `output_dirs.analysis` from `data_root/object_name`. Explicit `output_dirs` override those inferred directories; older V1 configs without `output_dirs` remain supported by setting `output_dir`, which is used for all generated FITS files. `master_bias.fits` and `master_flat_<filter>.fits` are written to the calibrated directory, while `stacked_<filter>.fits` is written to the stacked directory.
 
 ## Module responsibility table
 
 | Module or path | Responsibility | Main outputs |
 | --- | --- | --- |
-| `scripts/run_calibration.py` | Command-line entry point; loads one object YAML config, validates required fields, checks inputs, creates output directories, orchestrates master calibration products and stacked outputs. | `master_bias.fits`, `master_flat_<filter>.fits`, `stacked_<filter>.fits` |
+| `scripts/run_calibration.py` | Command-line entry point; loads one object YAML config, validates explicit or compact discovery fields, checks inputs, creates output directories, orchestrates master calibration products and stacked outputs. | `master_bias.fits`, `master_flat_<filter>.fits`, `stacked_<filter>.fits` |
 | `src/astro_image_lab/io.py` | FITS I/O boundary; reads primary-HDU image data and headers, writes data/header pairs back to FITS. | NumPy-like image arrays, FITS headers, FITS files |
 | `src/astro_image_lab/calibration.py` | Builds master bias and master flats; applies `(science - master_bias) / master_flat` calibration. | Master calibration arrays and calibrated science arrays |
 | `src/astro_image_lab/stacking.py` | Median-normalizes calibrated science images, optionally registers images with `astroalign`, sigma-clips stacks, and averages surviving pixels. | Stacked `float32` science images |
@@ -90,7 +103,7 @@ The `output_dirs` mapping in the object config points to the writable products d
 
 | Stage | Inputs | Outputs | Notes |
 | --- | --- | --- | --- |
-| Configuration | One object YAML file with `object_name`, `bias_files`, `flat_files`, `science_files`, `output_dirs`, and optional `align`, `sigma`, `maxiters`. Legacy configs may use `output_dir` instead of `output_dirs`. | Validated Python paths and options. | Filters in `flat_files` and `science_files` must match. |
+| Configuration | Compact object YAML with `object_name`, `data_root`, `filters`, and optional `align`, `sigma`, `maxiters`; or explicit YAML with `bias_files`, `flat_files`, `science_files`. Legacy configs may use `output_dir`; explicit `output_dirs` can override inferred outputs. | Validated Python paths and options. | Compact discovery requires standard per-filter raw and flat directories. Explicit mode still requires matching `flat_files` and `science_files` filters. |
 | Bias creation | Bias FITS files. | `output_dirs.calibrated/master_bias.fits` and in-memory master-bias array. | Default combine method is per-pixel median. Legacy `output_dir` configs write this file to the single legacy directory. |
 | Flat creation | Per-filter flat FITS files and master bias. | `output_dirs.calibrated/master_flat_<filter>.fits` and in-memory normalized master-flat arrays. | Each flat is bias-subtracted and median-normalized before equal-weight averaging. Legacy `output_dir` configs write these files to the single legacy directory. |
 | Science calibration | Per-filter raw science FITS files, master bias, matching master flat. | In-memory calibrated science arrays. | Invalid or zero flat pixels become `NaN` downstream. |
@@ -101,10 +114,10 @@ The `output_dirs` mapping in the object config points to the writable products d
 
 ## Data flow through the system
 
-1. Each observed target has its own YAML file. The config describes the object name, where raw calibration and science FITS files live, how filters are grouped, where object-specific outputs should be written, and which stacking parameters should be used.
-2. The CLI validates the config before importing heavier scientific helpers. It ensures the required fields exist, either `output_dirs` or legacy `output_dir` is configured, the flat/science filter sets match, scalar options have sensible types, and all input files are present. It creates all configured output directories when they are missing.
-3. Bias frames are loaded through the FITS I/O layer and combined into a master bias. The CLI writes that product with the header from the first bias frame into `output_dirs.calibrated` or the legacy `output_dir`.
-4. For each filter, flat frames are loaded, bias-subtracted, normalized by their median response, averaged, renormalized, and written as a filter-specific master flat into `output_dirs.calibrated` or the legacy `output_dir`.
+1. Each observed target has its own YAML file. Compact configs describe the object name, data root, filters, and stacking parameters; explicit configs can still list every bias, flat, and science FITS path.
+2. The CLI validates the config before importing heavier scientific helpers. In compact mode it checks required directories, discovers `.fits`, `.fit`, and `.fts` files with `pathlib`, sorts them, and raises clear errors for missing directories or empty required FITS directories. It also creates all configured or inferred output directories when they are missing.
+3. Bias frames are loaded through the FITS I/O layer and combined into a master bias. The CLI writes that product with the header from the first bias frame into the inferred or explicit calibrated directory, or the legacy `output_dir`.
+4. For each filter, flat frames are loaded, bias-subtracted, normalized by their median response, averaged, renormalized, and written as a filter-specific master flat into the inferred or explicit calibrated directory, or the legacy `output_dir`.
 5. For the same filter, each science frame is loaded, calibrated with the master bias and matching master flat, then normalized by its median to place images on a common relative scale.
 6. If alignment is enabled, the first normalized science image is used as the reference and later images are registered to it with `astroalign`. If alignment is disabled, images are stacked in their original pixel coordinates.
 7. The normalized image cube is sigma-clipped along the exposure axis and averaged into a final stacked image, which is saved as `stacked_<filter>.fits` in `output_dirs.stacked` or the legacy `output_dir`.
