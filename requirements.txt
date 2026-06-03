@@ -1,0 +1,6 @@
+numpy>=1.24
+astropy>=5.0
+astroalign>=2.5
+matplotlib>=3.7
+PyYAML>=6.0
+pytest>=7.0
