@@ -103,8 +103,9 @@ def test_main_reports_missing_example_files(capsys):
 
     captured = capsys.readouterr()
     assert exit_code == 1
-    assert "Missing input FITS file(s)" in captured.err
-    assert "data/calibration/bias/example_bias_001.fits" in captured.err
+    normalized_err = captured.err.replace("\\", "/")
+    assert "Missing input FITS file(s)" in normalized_err
+    assert "data/calibration/bias/example_bias_001.fits" in normalized_err
 
 
 def test_validate_config_reports_missing_required_field():
