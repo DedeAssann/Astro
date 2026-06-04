@@ -220,13 +220,13 @@ python scripts/make_demo_figures.py --object M83 --preset galaxy_detail \
   --crop-center X Y --crop-size 450
 ```
 
-Advanced overrides remain available for experimentation. Presets set defaults, and explicit options such as `--rgb-scale`, `--rgb-limits`, `--background-neutralization`, `--color-balance`, `--smooth-sigma`, `--unsharp-sigma`, or `--unsharp-amount` override the preset values. For example, this keeps the `deep_sky` background/color defaults but uses a squared scale:
+Advanced overrides remain available for experimentation. Presets set defaults, and explicit options such as `--rgb-scale`, `--rgb-limits`, `--background-neutralization`, `--color-balance`, `--balance-region full|crop`, `--smooth-sigma`, `--unsharp-sigma`, or `--unsharp-amount` override the preset values. For example, this keeps the `deep_sky` background/color defaults but uses a squared scale:
 
 ```bash
 python scripts/make_demo_figures.py --object M83 --preset deep_sky --rgb-scale squared
 ```
 
-The older `--ds9like`, manual named-scale outputs, crop outputs, and `--galaxy-detail-grid` comparison output are still available as advanced visualization-only tools. Crop outputs never modify FITS data; crops are applied to raw stacked/aligned RGB channels before display transforms, smoothing, or unsharp masking.
+The older `--ds9like`, manual named-scale outputs, crop outputs, and `--galaxy-detail-grid` comparison output are still available as advanced visualization-only tools. Crop outputs never modify FITS data; crops are applied to raw stacked/aligned RGB channels before display transforms, smoothing, or unsharp masking. By default, cropped outputs estimate zscale limits and background/color balance from the full aligned RGB frame (`--balance-region full`) to avoid galaxy-dominated crops over-correcting the color; use `--balance-region crop` only when you intentionally want crop-local balance estimates.
 
 
 Alignment remains enabled by default and can still be controlled with the legacy top-level `align: true` or `align: false` flag. New configs can use an `alignment` block for diagnostics and tuning; when `alignment.enabled` is present, it overrides the legacy `align` value. The default settings preserve the previous behavior:

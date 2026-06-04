@@ -258,3 +258,64 @@ def test_make_display_rgb_with_color_balance_options_returns_valid_image():
     assert rgb.shape == (5, 5, 3)
     assert np.all(np.isfinite(rgb))
     assert np.all((0 <= rgb) & (rgb <= 1))
+
+
+def test_full_and_crop_balance_regions_use_different_channel_factors():
+    rgb = np.full((8, 8, 3), 0.1, dtype=float)
+    rgb[2:6, 2:6, 1] = 0.8
+    crop = enhancement.crop_image(rgb, center=[3.5, 3.5], size=4)
+
+    _full_backgrounds, full_factors = enhancement.rgb_color_adjustment_factors(
+        rgb,
+        percentile=10,
+        background_neutralization="none",
+        color_balance="background",
+    )
+    _crop_backgrounds, crop_factors = enhancement.rgb_color_adjustment_factors(
+        crop,
+        percentile=10,
+        background_neutralization="none",
+        color_balance="background",
+    )
+
+    assert not np.allclose(full_factors, crop_factors)
+    np.testing.assert_allclose(full_factors, np.ones(3))
+    assert crop_factors[1] < full_factors[1]
+
+
+def test_make_processed_rgb_balance_region_full_differs_from_crop_region():
+    red = np.full((8, 8), 0.1, dtype=float)
+    green = np.full((8, 8), 0.1, dtype=float)
+    blue = np.full((8, 8), 0.1, dtype=float)
+    green[2:6, 2:6] = 0.8
+
+    full_balanced = enhancement.make_processed_rgb(
+        red,
+        green,
+        blue,
+        limits="percentile",
+        lower=0,
+        upper=100,
+        scale="linear",
+        crop_center=[3.5, 3.5],
+        crop_size=4,
+        background_neutralization="none",
+        color_balance="background",
+        balance_region="full",
+    )
+    crop_balanced = enhancement.make_processed_rgb(
+        red,
+        green,
+        blue,
+        limits="percentile",
+        lower=0,
+        upper=100,
+        scale="linear",
+        crop_center=[3.5, 3.5],
+        crop_size=4,
+        background_neutralization="none",
+        color_balance="background",
+        balance_region="crop",
+    )
+
+    assert not np.allclose(full_balanced, crop_balanced)

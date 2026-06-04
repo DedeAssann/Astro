@@ -30,6 +30,7 @@ VISUALIZATION_PRESETS = {
         "scale": "linear",
         "background_neutralization": "none",
         "color_balance": "none",
+        "balance_region": "full",
         "smooth_sigma": None,
         "unsharp_sigma": None,
         "unsharp_amount": None,
@@ -39,6 +40,7 @@ VISUALIZATION_PRESETS = {
         "scale": "squared",
         "background_neutralization": "equalize",
         "color_balance": "background",
+        "balance_region": "full",
         "smooth_sigma": None,
         "unsharp_sigma": None,
         "unsharp_amount": None,
@@ -48,6 +50,7 @@ VISUALIZATION_PRESETS = {
         "scale": "cubed",
         "background_neutralization": "equalize",
         "color_balance": "background",
+        "balance_region": "full",
         "smooth_sigma": None,
         "unsharp_sigma": None,
         "unsharp_amount": None,
@@ -57,6 +60,7 @@ VISUALIZATION_PRESETS = {
         "scale": "squared",
         "background_neutralization": "equalize",
         "color_balance": "background",
+        "balance_region": "full",
         "smooth_sigma": None,
         "unsharp_sigma": 2.0,
         "unsharp_amount": 0.6,
@@ -70,6 +74,7 @@ def _resolve_display_options(
     rgb_scale: str | None = None,
     background_neutralization: str | None = None,
     color_balance: str | None = None,
+    balance_region: str | None = None,
     smooth_sigma: float | None = None,
     unsharp_sigma: float | None = None,
     unsharp_amount: float | None = None,
@@ -80,6 +85,7 @@ def _resolve_display_options(
         "scale": rgb_scale,
         "background_neutralization": "none",
         "color_balance": "none",
+        "balance_region": "full",
         "smooth_sigma": smooth_sigma,
         "unsharp_sigma": unsharp_sigma,
         "unsharp_amount": unsharp_amount,
@@ -97,6 +103,8 @@ def _resolve_display_options(
         options["background_neutralization"] = background_neutralization
     if color_balance is not None:
         options["color_balance"] = color_balance
+    if balance_region is not None:
+        options["balance_region"] = balance_region
     if smooth_sigma is not None:
         options["smooth_sigma"] = smooth_sigma
     if unsharp_sigma is not None:
@@ -266,6 +274,7 @@ def _print_color_adjustment_log(
     background_neutralization: str,
     background_percentile: float,
     color_balance: str,
+    balance_region: str = "full",
     crop_center=None,
     crop_size=None,
 ) -> None:
@@ -273,14 +282,16 @@ def _print_color_adjustment_log(
     if background_neutralization == "none" and color_balance == "none":
         return
 
+    log_crop_center = crop_center if balance_region == "crop" else None
+    log_crop_size = crop_size if balance_region == "crop" else None
     scaled_rgb = _scaled_rgb_for_color_log(
         rgb_channel_data,
         limits=limits,
         zscale_contrast=zscale_contrast,
         lower=lower,
         upper=upper,
-        crop_center=crop_center,
-        crop_size=crop_size,
+        crop_center=log_crop_center,
+        crop_size=log_crop_size,
     )
     backgrounds = [
         enhancement.estimate_channel_background(scaled_rgb[..., channel], background_percentile)
@@ -302,6 +313,7 @@ def _print_color_adjustment_log(
     factor_text = ", ".join(
         f"{name}={value:.6g}" for name, value in zip(("red", "green", "blue"), balance_factors)
     )
+    print(f"{label} balance region: {balance_region}")
     print(f"{label} background estimates ({background_percentile:g}th percentile): {background_text}")
     print(f"{label} color balance factors ({color_balance}): {factor_text}")
 
@@ -322,6 +334,7 @@ def _make_galaxy_detail_grid(
     background_neutralization: str = "none",
     background_percentile: float = 10,
     color_balance: str = "none",
+    balance_region: str = "full",
 ) -> Path:
     """Create the six-panel galaxy detail grid requested by the CLI."""
     panels = [
@@ -355,6 +368,7 @@ def _make_galaxy_detail_grid(
             background_neutralization=background_neutralization,
             background_percentile=background_percentile,
             color_balance=color_balance,
+            balance_region=balance_region,
             **panel_kwargs,
         )
         ax.imshow(rgb, origin="lower")
@@ -377,6 +391,7 @@ def _make_galaxy_detail_grid(
         background_neutralization=background_neutralization,
         background_percentile=background_percentile,
         color_balance=color_balance,
+        balance_region=balance_region,
     )
     return output_path
 
@@ -405,6 +420,7 @@ def make_demo_figures(
     galaxy_detail_grid: bool = False,
     background_neutralization: str | None = None,
     color_balance: str | None = None,
+    balance_region: str | None = None,
 ) -> list[Path]:
     """Create PNG demo figures from stacked FITS files for one object.
 
@@ -423,6 +439,7 @@ def make_demo_figures(
         rgb_scale=rgb_scale,
         background_neutralization=background_neutralization,
         color_balance=color_balance,
+        balance_region=balance_region,
         smooth_sigma=smooth_sigma,
         unsharp_sigma=unsharp_sigma,
         unsharp_amount=unsharp_amount,
@@ -431,6 +448,7 @@ def make_demo_figures(
     effective_scale = display_options["scale"]
     effective_background_neutralization = str(display_options["background_neutralization"])
     effective_color_balance = str(display_options["color_balance"])
+    effective_balance_region = str(display_options["balance_region"])
     effective_smooth_sigma = display_options["smooth_sigma"]
     effective_unsharp_sigma = display_options["unsharp_sigma"]
     effective_unsharp_amount = display_options["unsharp_amount"]
@@ -524,6 +542,7 @@ def make_demo_figures(
                 background_neutralization=effective_background_neutralization,
                 background_percentile=background_percentile,
                 color_balance=effective_color_balance,
+                balance_region=effective_balance_region,
             )
             _print_color_adjustment_log(
                 "ds9like",
@@ -535,6 +554,7 @@ def make_demo_figures(
                 background_neutralization=effective_background_neutralization,
                 background_percentile=background_percentile,
                 color_balance=effective_color_balance,
+                balance_region=effective_balance_region,
             )
 
         if preset is not None and preset != "galaxy_detail":
@@ -570,6 +590,7 @@ def make_demo_figures(
                 background_neutralization=effective_background_neutralization,
                 background_percentile=background_percentile,
                 color_balance=effective_color_balance,
+                balance_region=effective_balance_region,
             )
             _print_color_adjustment_log(
                 f"preset:{preset}",
@@ -581,6 +602,7 @@ def make_demo_figures(
                 background_neutralization=effective_background_neutralization,
                 background_percentile=background_percentile,
                 color_balance=effective_color_balance,
+                balance_region=effective_balance_region,
             )
 
         if preset is None and rgb_scale is not None:
@@ -614,6 +636,7 @@ def make_demo_figures(
                 background_neutralization=effective_background_neutralization,
                 background_percentile=background_percentile,
                 color_balance=effective_color_balance,
+                balance_region=effective_balance_region,
             )
             _print_color_adjustment_log(
                 "rgb-scale",
@@ -625,6 +648,7 @@ def make_demo_figures(
                 background_neutralization=effective_background_neutralization,
                 background_percentile=background_percentile,
                 color_balance=effective_color_balance,
+                balance_region=effective_balance_region,
             )
 
         crop_requested = interpreted_crop_center is not None or crop_size is not None or preset == "galaxy_detail"
@@ -677,6 +701,7 @@ def make_demo_figures(
                     background_neutralization=effective_background_neutralization,
                     background_percentile=background_percentile,
                     color_balance=effective_color_balance,
+                    balance_region=effective_balance_region,
                 )
                 _save_rgb(
                     figures_dir / output_name,
@@ -695,6 +720,7 @@ def make_demo_figures(
                     background_neutralization=effective_background_neutralization,
                     background_percentile=background_percentile,
                     color_balance=effective_color_balance,
+                    balance_region=effective_balance_region,
                 )
                 _print_color_adjustment_log(
                     "crop" if preset != "galaxy_detail" else "preset:galaxy_detail",
@@ -706,6 +732,7 @@ def make_demo_figures(
                     background_neutralization=effective_background_neutralization,
                     background_percentile=background_percentile,
                     color_balance=effective_color_balance,
+                    balance_region=effective_balance_region,
                     crop_center=crop_center_for_output,
                     crop_size=crop_size_for_output,
                 )
@@ -737,6 +764,7 @@ def make_demo_figures(
                 background_neutralization=effective_background_neutralization,
                 background_percentile=background_percentile,
                 color_balance=effective_color_balance,
+                balance_region=effective_balance_region,
             )
             written_paths.append(grid_path)
             _print_color_adjustment_log(
@@ -749,6 +777,7 @@ def make_demo_figures(
                 background_neutralization=effective_background_neutralization,
                 background_percentile=background_percentile,
                 color_balance=effective_color_balance,
+                balance_region=effective_balance_region,
                 crop_center=grid_crop_center,
                 crop_size=grid_crop_size,
             )
@@ -812,6 +841,12 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["none", "background", "median", "max"],
         default=None,
         help="Advanced override for display RGB channel balancing method.",
+    )
+    parser.add_argument(
+        "--balance-region",
+        choices=["full", "crop"],
+        default=None,
+        help="Region used to estimate crop background/color balance (default: full).",
     )
     parser.add_argument(
         "--lower",
@@ -926,6 +961,7 @@ def main(argv: list[str] | None = None) -> int:
             galaxy_detail_grid=args.galaxy_detail_grid,
             background_neutralization=args.background_neutralization,
             color_balance=args.color_balance,
+            balance_region=args.balance_region,
         )
     except DemoFigureError as exc:
         parser.error(str(exc))

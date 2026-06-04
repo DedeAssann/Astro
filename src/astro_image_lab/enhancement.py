@@ -14,6 +14,7 @@ _LIMIT_MODES = {"zscale", "percentile"}
 _CHANNEL_MODES = {"per-channel", "global"}
 _BACKGROUND_NEUTRALIZATION_MODES = {"none", "subtract", "equalize"}
 _COLOR_BALANCE_METHODS = {"none", "background", "median", "max"}
+_BALANCE_REGIONS = {"full", "crop"}
 
 
 def _finite_values(image: np.ndarray) -> np.ndarray:
@@ -390,6 +391,81 @@ def _limits_for_channel(channel, limits, lower, upper, zscale_contrast) -> tuple
     raise ValueError(f"limits must be one of {sorted(_LIMIT_MODES)}")
 
 
+def _channel_limit_pairs(channels, limits, lower, upper, zscale_contrast, channel_mode):
+    """Return per-channel display limits for three source channels."""
+    if channel_mode == "global":
+        combined = np.concatenate([_finite_values(channel) for channel in channels])
+        vmin, vmax = _limits_for_channel(combined, limits, lower, upper, zscale_contrast)
+        return [(vmin, vmax)] * 3
+    return [
+        _limits_for_channel(channel, limits, lower, upper, zscale_contrast)
+        for channel in channels
+    ]
+
+
+def _scale_channels_to_rgb(channels, limit_pairs) -> np.ndarray:
+    """Scale three channels to one linear RGB array using supplied limits."""
+    scaled_channels = [
+        scale_to_limits(channel, vmin, vmax)
+        for channel, (vmin, vmax) in zip(channels, limit_pairs)
+    ]
+    return np.clip(np.dstack(scaled_channels), 0.0, 1.0)
+
+
+def rgb_color_adjustment_factors(
+    rgb,
+    percentile=10,
+    background_neutralization="none",
+    color_balance="none",
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return background estimates and balance factors for a normalized RGB array."""
+    reference_rgb = _as_rgb_array(rgb)
+    backgrounds = _rgb_backgrounds(reference_rgb, percentile=percentile)
+    neutralized_reference = neutralize_rgb_background(
+        reference_rgb,
+        percentile=percentile,
+        mode=background_neutralization,
+    )
+    factors = rgb_channel_balance_factors(
+        neutralized_reference,
+        method=color_balance,
+        percentile=percentile,
+    )
+    return backgrounds, factors
+
+
+def _apply_rgb_color_adjustments(
+    rgb,
+    percentile=10,
+    background_neutralization="none",
+    color_balance="none",
+    reference_rgb=None,
+) -> np.ndarray:
+    """Apply background neutralization and channel balance using a reference region."""
+    target_rgb = _as_rgb_array(rgb)
+    reference_rgb = target_rgb if reference_rgb is None else _as_rgb_array(reference_rgb)
+    backgrounds, factors = rgb_color_adjustment_factors(
+        reference_rgb,
+        percentile=percentile,
+        background_neutralization=background_neutralization,
+        color_balance=color_balance,
+    )
+
+    if background_neutralization == "none":
+        adjusted = target_rgb
+    elif background_neutralization == "subtract":
+        adjusted = target_rgb - backgrounds.reshape(1, 1, 3)
+    elif background_neutralization == "equalize":
+        target = float(np.median(backgrounds[np.isfinite(backgrounds)]))
+        adjusted = target_rgb + (target - backgrounds).reshape(1, 1, 3)
+    else:
+        raise ValueError(
+            f"background_neutralization must be one of {sorted(_BACKGROUND_NEUTRALIZATION_MODES)}"
+        )
+    adjusted = np.clip(adjusted, 0.0, 1.0)
+    return np.clip(adjusted * factors.reshape(1, 1, 3), 0.0, 1.0)
+
+
 def make_display_rgb(
     red,
     green,
@@ -418,26 +494,16 @@ def make_display_rgb(
     if any(channel.shape != channels[0].shape for channel in channels):
         raise ValueError("red, green, and blue channels must have matching shapes")
 
-    if channel_mode == "global":
-        combined = np.concatenate([_finite_values(channel) for channel in channels])
-        vmin, vmax = _limits_for_channel(combined, limits, lower, upper, zscale_contrast)
-        limit_pairs = [(vmin, vmax)] * 3
-    else:
-        limit_pairs = [
-            _limits_for_channel(channel, limits, lower, upper, zscale_contrast)
-            for channel in channels
-        ]
-    scaled_channels = [
-        scale_to_limits(channel, vmin, vmax)
-        for channel, (vmin, vmax) in zip(channels, limit_pairs)
-    ]
-    rgb = np.clip(np.dstack(scaled_channels), 0.0, 1.0)
-    rgb = neutralize_rgb_background(
+    limit_pairs = _channel_limit_pairs(
+        channels, limits, lower, upper, zscale_contrast, channel_mode
+    )
+    rgb = _scale_channels_to_rgb(channels, limit_pairs)
+    rgb = _apply_rgb_color_adjustments(
         rgb,
         percentile=background_percentile,
-        mode=background_neutralization,
+        background_neutralization=background_neutralization,
+        color_balance=color_balance,
     )
-    rgb = balance_rgb_channels(rgb, method=color_balance, percentile=background_percentile)
     rgb = apply_display_scale(rgb, scale=scale, gamma=gamma, stretch=stretch)
     return np.clip(rgb, 0.0, 1.0)
 
@@ -462,31 +528,57 @@ def make_processed_rgb(
     background_neutralization="none",
     background_percentile=10,
     color_balance="none",
+    balance_region="full",
 ) -> np.ndarray:
     """Build a display RGB image with optional galaxy crop and post-processing.
 
-    The optional crop is applied to raw channels first, before display limits,
-    display scales, smoothing, or unsharp masking are applied.
+    With ``balance_region="full"`` (the default), cropped outputs estimate
+    display limits, background neutralization, and channel balance from the full
+    source channels before applying those full-frame corrections to the crop.
+    With ``balance_region="crop"``, those estimates are local to the crop.
     """
-    red_crop = crop_image(red, center=crop_center, size=crop_size)
-    green_crop = crop_image(green, center=crop_center, size=crop_size)
-    blue_crop = crop_image(blue, center=crop_center, size=crop_size)
-    rgb = make_display_rgb(
-        red_crop,
-        green_crop,
-        blue_crop,
-        limits=limits,
-        scale=scale,
-        zscale_contrast=zscale_contrast,
-        lower=lower,
-        upper=upper,
-        gamma=gamma,
-        stretch=stretch,
-        channel_mode=channel_mode,
-        background_neutralization=background_neutralization,
-        background_percentile=background_percentile,
-        color_balance=color_balance,
-    )
+    if balance_region not in _BALANCE_REGIONS:
+        raise ValueError(f"balance_region must be one of {sorted(_BALANCE_REGIONS)}")
+
+    channels = [np.asarray(channel, dtype=float) for channel in (red, green, blue)]
+    if any(channel.shape != channels[0].shape for channel in channels):
+        raise ValueError("red, green, and blue channels must have matching shapes")
+
+    if crop_center is None or crop_size is None or balance_region == "crop":
+        red_crop = crop_image(red, center=crop_center, size=crop_size)
+        green_crop = crop_image(green, center=crop_center, size=crop_size)
+        blue_crop = crop_image(blue, center=crop_center, size=crop_size)
+        rgb = make_display_rgb(
+            red_crop,
+            green_crop,
+            blue_crop,
+            limits=limits,
+            scale=scale,
+            zscale_contrast=zscale_contrast,
+            lower=lower,
+            upper=upper,
+            gamma=gamma,
+            stretch=stretch,
+            channel_mode=channel_mode,
+            background_neutralization=background_neutralization,
+            background_percentile=background_percentile,
+            color_balance=color_balance,
+        )
+    else:
+        limit_pairs = _channel_limit_pairs(
+            channels, limits, lower, upper, zscale_contrast, channel_mode
+        )
+        full_linear_rgb = _scale_channels_to_rgb(channels, limit_pairs)
+        crop_linear_rgb = crop_image(full_linear_rgb, center=crop_center, size=crop_size)
+        rgb = _apply_rgb_color_adjustments(
+            crop_linear_rgb,
+            percentile=background_percentile,
+            background_neutralization=background_neutralization,
+            color_balance=color_balance,
+            reference_rgb=full_linear_rgb,
+        )
+        rgb = apply_display_scale(rgb, scale=scale, gamma=gamma, stretch=stretch)
+
     if smooth_sigma is not None:
         rgb = np.clip(gaussian_smooth(rgb, sigma=smooth_sigma), 0.0, 1.0)
     if unsharp_sigma is not None or unsharp_amount is not None:

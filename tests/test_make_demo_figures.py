@@ -297,6 +297,8 @@ def test_cli_accepts_rgb_background_and_color_balance_options(tmp_path, monkeypa
             "10",
             "--color-balance",
             "background",
+            "--balance-region",
+            "full",
         ]
     )
 
@@ -318,6 +320,7 @@ def test_visualization_presets_map_to_expected_parameters():
         "scale": "linear",
         "background_neutralization": "none",
         "color_balance": "none",
+        "balance_region": "full",
         "smooth_sigma": None,
         "unsharp_sigma": None,
         "unsharp_amount": None,
@@ -328,6 +331,7 @@ def test_visualization_presets_map_to_expected_parameters():
     assert deep_sky["background_neutralization"] == "equalize"
     assert deep_sky["color_balance"] == "background"
     galaxy_detail = make_demo_figures._resolve_display_options("galaxy_detail")
+    assert galaxy_detail["balance_region"] == "full"
     assert galaxy_detail["unsharp_sigma"] == pytest.approx(2.0)
     assert galaxy_detail["unsharp_amount"] == pytest.approx(0.6)
 
@@ -338,12 +342,14 @@ def test_explicit_cli_values_override_preset_values():
         rgb_scale="squared",
         background_neutralization="none",
         color_balance="median",
+        balance_region="crop",
     )
 
     assert options["limits"] == "zscale"
     assert options["scale"] == "squared"
     assert options["background_neutralization"] == "none"
     assert options["color_balance"] == "median"
+    assert options["balance_region"] == "crop"
 
 
 def test_deep_sky_preset_output_is_written(tmp_path, monkeypatch):
