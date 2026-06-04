@@ -498,3 +498,84 @@ def test_main_reports_missing_bias_directory_from_temp_config(tmp_path, capsys, 
 def test_validate_config_reports_missing_required_input_mode():
     with pytest.raises(run_calibration.ConfigError, match="all explicit input fields"):
         run_calibration._validate_config({"bias_files": ["bias.fits"]})
+
+
+def test_validate_config_diagnostics_defaults_disabled(tmp_path):
+    files = _input_files(tmp_path)
+    validated = run_calibration._validate_config(
+        {
+            "bias_files": [str(files["bias"])],
+            "flat_files": {"red": [str(files["flat"])]},
+            "science_files": {"red": [str(files["science"])]},
+            "output_dir": str(tmp_path / "out"),
+        }
+    )
+
+    assert validated["diagnostics"] == {
+        "enabled": False,
+        "random_seed": 42,
+        "bins": 100,
+        "lower_percentile": 0.5,
+        "upper_percentile": 99.5,
+        "max_pixels": 1_000_000,
+    }
+
+
+def test_run_pipeline_triggers_diagnostics_only_when_enabled(tmp_path, monkeypatch):
+    files = _input_files(tmp_path)
+    output_dir = tmp_path / "results"
+    config_path = tmp_path / "config.yaml"
+    _write_legacy_config(config_path, output_dir, files)
+    with config_path.open("a", encoding="utf-8") as config_file:
+        config_file.write(
+            "diagnostics:\n"
+            "  enabled: true\n"
+            "  random_seed: 11\n"
+            "  bins: 8\n"
+            "  lower_percentile: 1\n"
+            "  upper_percentile: 99\n"
+            "  max_pixels: 123\n"
+        )
+    _calls, _saved, master_bias, master_flat = _mock_pipeline_helpers(monkeypatch)
+    diagnostics_calls = []
+
+    def fake_run_pipeline_diagnostics(**kwargs):
+        diagnostics_calls.append(kwargs)
+        output_path = kwargs["output_dir"] / "pixel_statistics.csv"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("stage,filter,label,source_path\n", encoding="utf-8")
+        return [output_path]
+
+    monkeypatch.setattr(run_calibration, "run_pipeline_diagnostics", fake_run_pipeline_diagnostics)
+
+    written = run_calibration.run_pipeline(config_path)
+
+    assert len(diagnostics_calls) == 1
+    call = diagnostics_calls[0]
+    assert call["bias_files"] == [files["bias"]]
+    assert call["flat_files"] == {"red": [files["flat"]]}
+    assert call["science_files"] == {"red": [files["science"]]}
+    assert call["master_bias"] == master_bias
+    assert call["master_flats"] == {"red": master_flat}
+    assert call["master_bias_path"] == output_dir / "master_bias.fits"
+    assert call["master_flat_paths"] == {"red": output_dir / "master_flat_red.fits"}
+    assert call["stacked_paths"] == {"red": output_dir / "stacked_red.fits"}
+    assert call["output_dir"] == output_dir / "diagnostics"
+    assert call["config"]["enabled"] is True
+    assert call["config"]["random_seed"] == 11
+    assert output_dir / "diagnostics" / "pixel_statistics.csv" in written
+
+
+def test_run_pipeline_does_not_trigger_diagnostics_when_absent(tmp_path, monkeypatch):
+    files = _input_files(tmp_path)
+    output_dir = tmp_path / "results"
+    config_path = tmp_path / "config.yaml"
+    _write_legacy_config(config_path, output_dir, files)
+    _mock_pipeline_helpers(monkeypatch)
+
+    def fail_if_called(**_kwargs):
+        raise AssertionError("diagnostics should not run when disabled or absent")
+
+    monkeypatch.setattr(run_calibration, "run_pipeline_diagnostics", fail_if_called)
+
+    run_calibration.run_pipeline(config_path)

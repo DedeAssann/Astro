@@ -20,3 +20,10 @@ channel_alignment:
   fail_policy: raise
 sigma: 2
 maxiters: 10
+diagnostics:
+  enabled: true
+  random_seed: 42
+  bins: 100
+  lower_percentile: 0.5
+  upper_percentile: 99.5
+  max_pixels: 1000000
