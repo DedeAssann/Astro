@@ -357,3 +357,91 @@ def test_color_balance_strength_and_channel_scales_validate_ranges():
         enhancement.effective_rgb_channel_balance_factors(np.ones(3), color_balance_strength=-0.1)
     with pytest.raises(ValueError, match="channel_scales"):
         enhancement.balance_rgb_channels(np.ones((2, 2, 3)), method="none", channel_scales=(1, 0, 1))
+
+
+def test_make_processed_rgb_contrast_region_crop_estimates_limits_from_crop(monkeypatch):
+    red = np.arange(100, dtype=float).reshape(10, 10)
+    green = red + 100
+    blue = red + 200
+    calls = []
+
+    def fake_limits(channel, limits, lower, upper, zscale_contrast):
+        calls.append(np.asarray(channel).shape)
+        return float(np.nanmin(channel)), float(np.nanmax(channel))
+
+    monkeypatch.setattr(enhancement, "_limits_for_channel", fake_limits)
+
+    enhancement.make_processed_rgb(
+        red,
+        green,
+        blue,
+        limits="percentile",
+        scale="linear",
+        crop_center=[5, 5],
+        crop_size=4,
+        contrast_region="crop",
+        balance_region="crop",
+    )
+
+    assert calls == [(4, 4), (4, 4), (4, 4)]
+
+
+def test_make_processed_rgb_balance_region_full_estimates_factors_from_full_when_cropped(monkeypatch):
+    red = np.arange(100, dtype=float).reshape(10, 10)
+    green = red + 100
+    blue = red + 200
+    reference_shapes = []
+    original_apply = enhancement._apply_rgb_color_adjustments
+
+    def spy_apply(rgb, *args, reference_rgb=None, **kwargs):
+        reference_shapes.append(np.asarray(reference_rgb).shape)
+        return original_apply(rgb, *args, reference_rgb=reference_rgb, **kwargs)
+
+    monkeypatch.setattr(enhancement, "_apply_rgb_color_adjustments", spy_apply)
+
+    enhancement.make_processed_rgb(
+        red,
+        green,
+        blue,
+        limits="percentile",
+        lower=0,
+        upper=100,
+        scale="linear",
+        crop_center=[5, 5],
+        crop_size=4,
+        contrast_region="crop",
+        balance_region="full",
+        background_neutralization="equalize",
+        color_balance="background",
+    )
+
+    assert reference_shapes == [(10, 10, 3)]
+
+
+def test_masked_unsharp_preserves_dark_background_more_than_raw_unsharp():
+    rgb = np.zeros((21, 21, 3), dtype=float)
+    rgb[8:13, 8:13, :] = 0.45
+    rgb[10, 10, :] = 0.7
+    rgb[0, 0, :] = 0.08
+
+    raw = enhancement.unsharp_mask(rgb, sigma=1.0, amount=0.8)
+    masked = enhancement.masked_unsharp_mask(
+        rgb,
+        sigma=1.0,
+        amount=0.8,
+        mask_percentile=95,
+        mask_softness=0.0,
+    )
+
+    np.testing.assert_allclose(masked[0, 0], rgb[0, 0])
+    assert not np.allclose(raw[10, 10], rgb[10, 10])
+    assert not np.allclose(masked[10, 10], rgb[10, 10])
+
+
+def test_signal_mask_validates_percentile_and_softness():
+    rgb = np.ones((2, 2, 3), dtype=float)
+
+    with pytest.raises(ValueError, match="percentile"):
+        enhancement.signal_mask_from_luminance(rgb, percentile=101)
+    with pytest.raises(ValueError, match="softness"):
+        enhancement.signal_mask_from_luminance(rgb, softness=-1)
