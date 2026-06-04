@@ -370,17 +370,59 @@ def rgb_channel_balance_factors(rgb: np.ndarray, method="background", percentile
     return factors
 
 
-def balance_rgb_channels(rgb, method="background", percentile=10) -> np.ndarray:
+def _validate_color_balance_strength(color_balance_strength: float) -> float:
+    """Return a validated color-balance strength in ``[0, 1]``."""
+    strength = float(color_balance_strength)
+    if not np.isfinite(strength) or strength < 0 or strength > 1:
+        raise ValueError("color_balance_strength must be between 0 and 1")
+    return strength
+
+
+def effective_rgb_channel_balance_factors(
+    factors, color_balance_strength=1.0
+) -> np.ndarray:
+    """Blend full RGB balance factors toward one by ``color_balance_strength``."""
+    strength = _validate_color_balance_strength(color_balance_strength)
+    factors = np.asarray(factors, dtype=float)
+    if factors.shape != (3,):
+        raise ValueError("factors must contain red, green, and blue values")
+    return 1.0 + strength * (factors - 1.0)
+
+
+def _validate_channel_scales(channel_scales) -> np.ndarray:
+    """Return positive manual RGB channel scales as a three-value array."""
+    scales = np.asarray(channel_scales, dtype=float)
+    if scales.shape != (3,):
+        raise ValueError("channel_scales must contain red, green, and blue scales")
+    if not np.all(np.isfinite(scales)) or np.any(scales <= 0):
+        raise ValueError("channel_scales must be positive finite values")
+    return scales
+
+
+def balance_rgb_channels(
+    rgb,
+    method="background",
+    percentile=10,
+    color_balance_strength=1.0,
+    channel_scales=(1.0, 1.0, 1.0),
+) -> np.ndarray:
     """Balance RGB display channel levels and keep values in ``[0, 1]``.
 
     ``background`` scales channels so finite background percentiles match,
     ``median`` matches channel medians, ``max`` matches high-percentile highlight
     levels, and ``none`` leaves the finite-safe clipped RGB image unchanged.
     Channels with zero or invalid statistics receive a factor of one.
+    ``color_balance_strength`` blends automatic factors toward one, and
+    ``channel_scales`` applies manual red/green/blue multipliers after that.
     """
     safe_rgb = _as_rgb_array(rgb)
     factors = rgb_channel_balance_factors(safe_rgb, method=method, percentile=percentile)
-    return np.clip(safe_rgb * factors.reshape(1, 1, 3), 0.0, 1.0)
+    effective_factors = effective_rgb_channel_balance_factors(
+        factors, color_balance_strength=color_balance_strength
+    )
+    manual_scales = _validate_channel_scales(channel_scales)
+    total_factors = effective_factors * manual_scales
+    return np.clip(safe_rgb * total_factors.reshape(1, 1, 3), 0.0, 1.0)
 
 
 def _limits_for_channel(channel, limits, lower, upper, zscale_contrast) -> tuple[float, float]:
@@ -439,6 +481,8 @@ def _apply_rgb_color_adjustments(
     percentile=10,
     background_neutralization="none",
     color_balance="none",
+    color_balance_strength=1.0,
+    channel_scales=(1.0, 1.0, 1.0),
     reference_rgb=None,
 ) -> np.ndarray:
     """Apply background neutralization and channel balance using a reference region."""
@@ -463,7 +507,12 @@ def _apply_rgb_color_adjustments(
             f"background_neutralization must be one of {sorted(_BACKGROUND_NEUTRALIZATION_MODES)}"
         )
     adjusted = np.clip(adjusted, 0.0, 1.0)
-    return np.clip(adjusted * factors.reshape(1, 1, 3), 0.0, 1.0)
+    effective_factors = effective_rgb_channel_balance_factors(
+        factors, color_balance_strength=color_balance_strength
+    )
+    manual_scales = _validate_channel_scales(channel_scales)
+    total_factors = effective_factors * manual_scales
+    return np.clip(adjusted * total_factors.reshape(1, 1, 3), 0.0, 1.0)
 
 
 def make_display_rgb(
@@ -481,6 +530,8 @@ def make_display_rgb(
     background_neutralization="none",
     background_percentile=10,
     color_balance="none",
+    color_balance_strength=1.0,
+    channel_scales=(1.0, 1.0, 1.0),
 ) -> np.ndarray:
     """Create a display-scaled RGB preview clipped to ``[0, 1]``.
 
@@ -503,6 +554,8 @@ def make_display_rgb(
         percentile=background_percentile,
         background_neutralization=background_neutralization,
         color_balance=color_balance,
+        color_balance_strength=color_balance_strength,
+        channel_scales=channel_scales,
     )
     rgb = apply_display_scale(rgb, scale=scale, gamma=gamma, stretch=stretch)
     return np.clip(rgb, 0.0, 1.0)
@@ -528,6 +581,8 @@ def make_processed_rgb(
     background_neutralization="none",
     background_percentile=10,
     color_balance="none",
+    color_balance_strength=1.0,
+    channel_scales=(1.0, 1.0, 1.0),
     balance_region="full",
 ) -> np.ndarray:
     """Build a display RGB image with optional galaxy crop and post-processing.
@@ -563,6 +618,8 @@ def make_processed_rgb(
             background_neutralization=background_neutralization,
             background_percentile=background_percentile,
             color_balance=color_balance,
+            color_balance_strength=color_balance_strength,
+            channel_scales=channel_scales,
         )
     else:
         limit_pairs = _channel_limit_pairs(
@@ -575,6 +632,8 @@ def make_processed_rgb(
             percentile=background_percentile,
             background_neutralization=background_neutralization,
             color_balance=color_balance,
+            color_balance_strength=color_balance_strength,
+            channel_scales=channel_scales,
             reference_rgb=full_linear_rgb,
         )
         rgb = apply_display_scale(rgb, scale=scale, gamma=gamma, stretch=stretch)

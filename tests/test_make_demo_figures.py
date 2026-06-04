@@ -297,6 +297,12 @@ def test_cli_accepts_rgb_background_and_color_balance_options(tmp_path, monkeypa
             "10",
             "--color-balance",
             "background",
+            "--color-balance-strength",
+            "0.5",
+            "--channel-scales",
+            "1.0",
+            "0.9",
+            "1.1",
             "--balance-region",
             "full",
         ]
@@ -307,6 +313,8 @@ def test_cli_accepts_rgb_background_and_color_balance_options(tmp_path, monkeypa
     stdout = capsys.readouterr().out
     assert "ds9like background estimates" in stdout
     assert "ds9like color balance factors" in stdout
+    assert "ds9like effective balance factors" in stdout
+    assert "ds9like manual channel scales" in stdout
 
 
 def test_crop_center_origin_one_shifts_center_by_one_pixel():
@@ -320,6 +328,8 @@ def test_visualization_presets_map_to_expected_parameters():
         "scale": "linear",
         "background_neutralization": "none",
         "color_balance": "none",
+        "color_balance_strength": 1.0,
+        "channel_scales": (1.0, 1.0, 1.0),
         "balance_region": "full",
         "smooth_sigma": None,
         "unsharp_sigma": None,
@@ -332,6 +342,8 @@ def test_visualization_presets_map_to_expected_parameters():
     assert deep_sky["color_balance"] == "background"
     galaxy_detail = make_demo_figures._resolve_display_options("galaxy_detail")
     assert galaxy_detail["balance_region"] == "full"
+    assert galaxy_detail["color_balance_strength"] == pytest.approx(0.4)
+    assert galaxy_detail["channel_scales"] == (1.0, 0.9, 1.0)
     assert galaxy_detail["unsharp_sigma"] == pytest.approx(2.0)
     assert galaxy_detail["unsharp_amount"] == pytest.approx(0.6)
 
@@ -342,6 +354,8 @@ def test_explicit_cli_values_override_preset_values():
         rgb_scale="squared",
         background_neutralization="none",
         color_balance="median",
+        color_balance_strength=0.5,
+        channel_scales=[1.0, 0.8, 1.1],
         balance_region="crop",
     )
 
@@ -349,6 +363,8 @@ def test_explicit_cli_values_override_preset_values():
     assert options["scale"] == "squared"
     assert options["background_neutralization"] == "none"
     assert options["color_balance"] == "median"
+    assert options["color_balance_strength"] == pytest.approx(0.5)
+    assert options["channel_scales"] == (1.0, 0.8, 1.1)
     assert options["balance_region"] == "crop"
 
 

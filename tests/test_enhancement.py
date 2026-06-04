@@ -319,3 +319,41 @@ def test_make_processed_rgb_balance_region_full_differs_from_crop_region():
     )
 
     assert not np.allclose(full_balanced, crop_balanced)
+
+
+def test_color_balance_strength_blends_factors_toward_one():
+    factors = np.array([0.5, 1.0, 2.0])
+
+    np.testing.assert_allclose(
+        enhancement.effective_rgb_channel_balance_factors(factors, color_balance_strength=0.0),
+        np.ones(3),
+    )
+    np.testing.assert_allclose(
+        enhancement.effective_rgb_channel_balance_factors(factors, color_balance_strength=1.0),
+        factors,
+    )
+    np.testing.assert_allclose(
+        enhancement.effective_rgb_channel_balance_factors(factors, color_balance_strength=0.5),
+        np.array([0.75, 1.0, 1.5]),
+    )
+
+
+def test_channel_scales_modify_rgb_after_automatic_balance():
+    rgb = np.ones((2, 2, 3), dtype=float) * 0.5
+
+    scaled = enhancement.balance_rgb_channels(
+        rgb,
+        method="none",
+        channel_scales=(1.0, 0.5, 1.5),
+    )
+
+    np.testing.assert_allclose(scaled[..., 0], 0.5)
+    np.testing.assert_allclose(scaled[..., 1], 0.25)
+    np.testing.assert_allclose(scaled[..., 2], 0.75)
+
+
+def test_color_balance_strength_and_channel_scales_validate_ranges():
+    with pytest.raises(ValueError, match="color_balance_strength"):
+        enhancement.effective_rgb_channel_balance_factors(np.ones(3), color_balance_strength=-0.1)
+    with pytest.raises(ValueError, match="channel_scales"):
+        enhancement.balance_rgb_channels(np.ones((2, 2, 3)), method="none", channel_scales=(1, 0, 1))
