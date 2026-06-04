@@ -7,7 +7,7 @@ from pathlib import Path
 from .io import load_fits, save_fits
 
 
-def choose_reference_filter(filters, reference_filter="green"):
+def choose_reference_filter(filters, reference_filter=None):
     """Choose the channel-alignment reference filter.
 
     ``green`` is preferred by default when present. If no explicit reference is
@@ -50,7 +50,7 @@ def _channel_report_record(
 def align_stacked_channels(
     stacked_paths,
     output_dir,
-    reference_filter="green",
+    reference_filter=None,
     method="astroalign",
     min_area=12,
     fail_policy="raise",
@@ -65,8 +65,8 @@ def align_stacked_channels(
     output_dir : pathlib.Path or str
         Directory where ``stacked_<filter>_aligned.fits`` files are written.
     reference_filter : str or None, optional
-        Reference filter to align channels to. When ``None``, green is selected
-        if present, otherwise the first available filter is selected.
+        Reference filter to align channels to. Defaults to ``None`` so green is
+        selected when present, otherwise the first available filter is selected.
     method : {"astroalign"}, optional
         Channel alignment implementation. Only ``astroalign`` is supported.
     min_area : int, optional

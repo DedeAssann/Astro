@@ -10,7 +10,9 @@ from astro_image_lab import channel_alignment
 
 
 def test_choose_reference_filter_prefers_green_then_first_available():
+    assert channel_alignment.choose_reference_filter(["red", "green", "blue"]) == "green"
     assert channel_alignment.choose_reference_filter(["red", "green", "blue"], None) == "green"
+    assert channel_alignment.choose_reference_filter(["red", "blue"]) == "blue"
     assert channel_alignment.choose_reference_filter(["red", "blue"], None) == "blue"
     assert channel_alignment.choose_reference_filter(["red", "blue"], "red") == "red"
 
@@ -123,3 +125,38 @@ def test_align_stacked_channels_failure_raise_raises(monkeypatch, tmp_path):
             reference_filter="green",
             fail_policy="raise",
         )
+
+
+def test_align_stacked_channels_default_reference_falls_back_when_green_absent(monkeypatch, tmp_path):
+    stacked_paths = {
+        "blue": tmp_path / "stacked_blue.fits",
+        "red": tmp_path / "stacked_red.fits",
+    }
+    frames = {path: np.ones((2, 2), dtype=float) for path in stacked_paths.values()}
+    saved = []
+
+    class FakeAstroalign:
+        @staticmethod
+        def register(image, reference, **kwargs):
+            return image, np.zeros_like(image, dtype=bool)
+
+    monkeypatch.setitem(sys.modules, "astroalign", FakeAstroalign)
+    monkeypatch.setattr(channel_alignment, "load_fits", lambda path: (frames[Path(path)], {}))
+    monkeypatch.setattr(
+        channel_alignment,
+        "save_fits",
+        lambda data, header, path, overwrite=True: saved.append(Path(path)),
+    )
+
+    records = channel_alignment.align_stacked_channels(
+        stacked_paths,
+        tmp_path / "aligned_channels",
+    )
+
+    assert [record["filter"] for record in records] == ["blue", "red"]
+    assert [record["status"] for record in records] == ["reference", "aligned"]
+    assert all(record["reference_filter"] == "blue" for record in records)
+    assert saved == [
+        tmp_path / "aligned_channels" / "stacked_blue_aligned.fits",
+        tmp_path / "aligned_channels" / "stacked_red_aligned.fits",
+    ]
