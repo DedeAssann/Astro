@@ -81,3 +81,33 @@ def test_select_random_file_is_deterministic_and_sorts_paths(tmp_path):
 
     assert first == second
     assert first in paths
+
+
+def test_bias_frame_statistics_csv_and_distribution_plot(tmp_path, monkeypatch):
+    from astro_image_lab import diagnostics
+
+    bias_files = [tmp_path / "bias_2.fits", tmp_path / "bias_1.fits"]
+    for path in bias_files:
+        path.write_text("placeholder", encoding="utf-8")
+    arrays = {
+        bias_files[0]: np.array([[10.0, 12.0], [np.nan, np.inf]]),
+        bias_files[1]: np.array([[20.0, 22.0], [24.0, 26.0]]),
+    }
+
+    monkeypatch.setattr(diagnostics, "load_fits", lambda path: (arrays[Path(path)], {}))
+
+    records = diagnostics.compute_bias_frame_statistics(bias_files)
+    csv_path = tmp_path / "bias_frame_statistics.csv"
+    png_path = tmp_path / "bias_frame_mean_distribution.png"
+    diagnostics.write_bias_frame_statistics_csv(records, csv_path)
+    diagnostics.plot_bias_frame_mean_distribution(records, master_bias=np.array([[15.0, 17.0]]), output_path=png_path)
+
+    assert [Path(record["file"]).name for record in records] == ["bias_1.fits", "bias_2.fits"]
+    assert records[0]["mean"] == 23.0
+    assert records[0]["finite_fraction"] == 1.0
+    assert records[1]["mean"] == 11.0
+    assert records[1]["finite_fraction"] == 0.5
+    assert csv_path.exists()
+    assert "file,mean,median,std,min,max,p1,p99,finite_fraction" in csv_path.read_text(encoding="utf-8")
+    assert png_path.exists()
+    assert png_path.read_bytes().startswith(b"\x89PNG")

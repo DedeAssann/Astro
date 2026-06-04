@@ -20,6 +20,8 @@ channel_alignment:
   fail_policy: raise
 sigma: 2
 maxiters: 10
+stacking:
+  normalize_before_stack: false
 diagnostics:
   enabled: true
   random_seed: 42

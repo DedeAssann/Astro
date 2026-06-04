@@ -378,6 +378,24 @@ def _normalize_output_dirs(config: dict[str, Any], object_dir: Path | None) -> d
 
 
 
+
+def _validate_stacking_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Return normalized stacking options."""
+    stacking = {"normalize_before_stack": False}
+    stacking_config = config.get("stacking")
+    if stacking_config is None:
+        return stacking
+    if not isinstance(stacking_config, dict):
+        raise ConfigError("Config field 'stacking' must be a mapping")
+
+    if "normalize_before_stack" in stacking_config:
+        normalize_before_stack = stacking_config["normalize_before_stack"]
+        if not isinstance(normalize_before_stack, bool):
+            raise ConfigError("Config field 'stacking.normalize_before_stack' must be true or false")
+        stacking["normalize_before_stack"] = normalize_before_stack
+
+    return stacking
+
 def _validate_diagnostics_config(config: dict[str, Any]) -> dict[str, Any]:
     """Return normalized diagnostics options."""
     diagnostics = {
@@ -490,6 +508,7 @@ def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
 
     alignment = _validate_alignment_config(config)
     channel_alignment = _validate_channel_alignment_config(config)
+    stacking = _validate_stacking_config(config)
     diagnostics = _validate_diagnostics_config(config)
 
     sigma = config.get("sigma", 2)
@@ -510,6 +529,7 @@ def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
         "align": alignment["enabled"],
         "alignment": alignment,
         "channel_alignment": channel_alignment,
+        "stacking": stacking,
         "diagnostics": diagnostics,
         "sigma": sigma,
         "maxiters": maxiters,
@@ -670,6 +690,7 @@ def run_pipeline(config_path: Path) -> list[Path]:
             fail_policy=alignment["fail_policy"],
             alignment_method=alignment["method"],
             detection_sigma=alignment["detection_sigma"],
+            normalize_before_stack=config["stacking"]["normalize_before_stack"],
         )
         alignment_report_records.extend(filter_report_records)
         _science_data, science_header = fits_loader(config["science_files"][filter_name][0])
@@ -695,6 +716,7 @@ def run_pipeline(config_path: Path) -> list[Path]:
             stacked_paths=stacked_paths,
             output_dir=diagnostics_dir,
             config=diagnostics,
+            normalize_before_stack=config["stacking"]["normalize_before_stack"],
         )
         written_files.extend(diagnostic_files)
         for diagnostic_file in diagnostic_files:

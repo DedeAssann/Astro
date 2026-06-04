@@ -29,6 +29,18 @@ STATISTICS_FIELDNAMES = [
     "n_finite",
 ]
 
+BIAS_FRAME_STATISTICS_FIELDNAMES = [
+    "file",
+    "mean",
+    "median",
+    "std",
+    "min",
+    "max",
+    "p1",
+    "p99",
+    "finite_fraction",
+]
+
 DEFAULT_DIAGNOSTIC_CONFIG = {
     "enabled": False,
     "random_seed": 42,
@@ -213,6 +225,93 @@ def _write_statistics_csv(records: list[dict[str, Any]], output_path: Path) -> N
             writer.writerow({field: record.get(field, "") for field in STATISTICS_FIELDNAMES})
 
 
+def compute_bias_frame_statistics(bias_files: list[Path] | tuple[Path, ...]) -> list[dict[str, Any]]:
+    """Compute one finite-pixel statistics record for every bias frame."""
+    records: list[dict[str, Any]] = []
+    for bias_path in sorted(Path(path) for path in bias_files):
+        bias_data, _header = load_fits(bias_path)
+        stats = compute_pixel_statistics(bias_data, source_path=bias_path)
+        records.append(
+            {
+                "file": str(bias_path),
+                "mean": stats["mean"],
+                "median": stats["median"],
+                "std": stats["std"],
+                "min": stats["min"],
+                "max": stats["max"],
+                "p1": stats["p1"],
+                "p99": stats["p99"],
+                "finite_fraction": stats["finite_fraction"],
+            }
+        )
+    return records
+
+
+def write_bias_frame_statistics_csv(records: list[dict[str, Any]], output_path: Path) -> None:
+    """Write per-bias-frame statistics to CSV."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=BIAS_FRAME_STATISTICS_FIELDNAMES)
+        writer.writeheader()
+        for record in records:
+            writer.writerow({field: record.get(field, "") for field in BIAS_FRAME_STATISTICS_FIELDNAMES})
+
+
+def _autoscaled_y_limits(values: np.ndarray) -> tuple[float, float]:
+    finite_values = values[np.isfinite(values)]
+    if finite_values.size == 0:
+        return 0.0, 1.0
+    lower = float(np.min(finite_values))
+    upper = float(np.max(finite_values))
+    if lower == upper:
+        padding = max(abs(lower) * 0.01, 1.0)
+    else:
+        padding = (upper - lower) * 0.10
+    return lower - padding, upper + padding
+
+
+def plot_bias_frame_mean_distribution(
+    records: list[dict[str, Any]],
+    *,
+    master_bias: Any,
+    output_path: Path,
+) -> None:
+    """Plot per-bias-frame mean/median ADU with master-bias reference lines."""
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
+    indices = np.arange(len(records))
+    means = np.asarray([record["mean"] for record in records], dtype=float)
+    medians = np.asarray([record["median"] for record in records], dtype=float)
+    master_stats = compute_pixel_statistics(master_bias)
+    master_mean = float(master_stats["mean"])
+    master_median = float(master_stats["median"])
+
+    fig, ax = plt.subplots(figsize=(11, 6))
+    ax.plot(indices, means, marker="o", label="bias frame mean")
+    ax.plot(indices, medians, marker="s", label="bias frame median")
+    if np.isfinite(master_mean):
+        ax.axhline(master_mean, color="C0", linestyle="--", linewidth=1.5, label=f"master bias mean={master_mean:.4g}")
+    if np.isfinite(master_median):
+        ax.axhline(master_median, color="C1", linestyle="--", linewidth=1.5, label=f"master bias median={master_median:.4g}")
+
+    all_y_values = np.concatenate([means, medians, np.asarray([master_mean, master_median])])
+    ax.set_ylim(*_autoscaled_y_limits(all_y_values))
+    ax.set_xlabel("Bias frame index")
+    ax.set_ylabel("ADU")
+    ax.set_title("Bias frame mean/median distribution")
+    ax.set_xticks(indices)
+    ax.set_xticklabels([Path(record["file"]).name for record in records], rotation=45, ha="right")
+    ax.legend(fontsize="small")
+    ax.grid(alpha=0.25)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+
+
 def _normalized_flat_from_file(flat_path: Path, master_bias: Any) -> np.ndarray:
     flat_data, _header = load_fits(flat_path)
     bias_subtracted = np.asarray(flat_data, dtype=float) - np.asarray(master_bias, dtype=float)
@@ -235,6 +334,7 @@ def run_pipeline_diagnostics(
     stacked_paths: dict[str, Path],
     output_dir: Path,
     config: dict[str, Any] | None = None,
+    normalize_before_stack: bool = False,
 ) -> list[Path]:
     """Create calibration/stacking diagnostic plots and ``pixel_statistics.csv``."""
     options = {**DEFAULT_DIAGNOSTIC_CONFIG, **(config or {})}
@@ -270,6 +370,21 @@ def run_pipeline_diagnostics(
             compute_pixel_statistics(master_bias, stage="bias", label="master bias", source_path=master_bias_path),
         ]
     )
+
+    bias_frame_records = compute_bias_frame_statistics(bias_files)
+    bias_statistics_path = output_dir / "bias_frame_statistics.csv"
+    write_bias_frame_statistics_csv(bias_frame_records, bias_statistics_path)
+    written.append(bias_statistics_path)
+
+    bias_distribution_path = output_dir / "bias_frame_mean_distribution.png"
+    plot_bias_frame_mean_distribution(
+        bias_frame_records,
+        master_bias=master_bias,
+        output_path=bias_distribution_path,
+    )
+    written.append(bias_distribution_path)
+
+    normalization_label = "enabled" if normalize_before_stack else "disabled"
 
     for filter_name in sorted(science_files):
         flat_path = select_random_file(flat_files[filter_name], seed)
@@ -314,13 +429,36 @@ def run_pipeline_diagnostics(
             ]
         )
 
+        if normalize_before_stack:
+            normalized_science = calibrated_science / np.nanmedian(calibrated_science)
+            plot_path = output_dir / f"science_{filter_name}_calibrated_vs_normalized_hist.png"
+            plot_histogram_comparison(
+                calibrated_science,
+                normalized_science,
+                first_label="calibrated science",
+                second_label="median-normalized calibrated science",
+                title=f"Stacking normalization diagnostic ({filter_name}): calibrated vs median-normalized",
+                output_path=plot_path,
+                **plot_kwargs,
+            )
+            written.append(plot_path)
+            records.extend(
+                [
+                    compute_pixel_statistics(calibrated_science, stage="stacking_normalization", filter_name=filter_name, label="calibrated science", source_path=science_path),
+                    compute_pixel_statistics(normalized_science, stage="stacking_normalization", filter_name=filter_name, label="median-normalized calibrated science", source_path=science_path),
+                ]
+            )
+
         plot_path = output_dir / f"science_{filter_name}_calibrated_vs_stacked_hist.png"
         plot_histogram_comparison(
             calibrated_science,
             stacked_images[filter_name],
             first_label="calibrated science",
             second_label="stacked science",
-            title=f"Stacking diagnostic ({filter_name}): calibrated frame vs stacked image",
+            title=(
+                f"Stacking diagnostic ({filter_name}): calibrated frame vs stacked image "
+                f"(median normalization {normalization_label})"
+            ),
             output_path=plot_path,
             **plot_kwargs,
         )
@@ -328,7 +466,13 @@ def run_pipeline_diagnostics(
         records.extend(
             [
                 compute_pixel_statistics(calibrated_science, stage="stacking", filter_name=filter_name, label="calibrated science", source_path=science_path),
-                compute_pixel_statistics(stacked_images[filter_name], stage="stacking", filter_name=filter_name, label="stacked science", source_path=stacked_paths[filter_name]),
+                compute_pixel_statistics(
+                    stacked_images[filter_name],
+                    stage="stacking",
+                    filter_name=filter_name,
+                    label=f"stacked science (median normalization {normalization_label})",
+                    source_path=stacked_paths[filter_name],
+                ),
             ]
         )
 

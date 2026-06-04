@@ -42,7 +42,7 @@ def test_stack_images_sigma_clips_and_nanmeans_axis_zero():
     assert stacked.dtype == np.float32
 
 
-def test_calibrate_and_stack_align_false_loads_calibrates_normalizes_all_images(monkeypatch):
+def test_calibrate_and_stack_align_false_preserves_calibrated_scale_by_default(monkeypatch):
     frames = {
         "science_1.fits": np.array([[12, 22], [32, 42]], dtype=float),
         "science_2.fits": np.array([[14, 24], [34, 44]], dtype=float),
@@ -53,14 +53,31 @@ def test_calibrate_and_stack_align_false_loads_calibrates_normalizes_all_images(
 
     stacked = stacking.calibrate_and_stack(list(frames), master_bias, master_flat, align=False)
 
-    expected_images = []
-    for frame in frames.values():
-        calibrated = (frame - master_bias) / master_flat
-        expected_images.append(calibrated / np.median(calibrated))
+    expected_images = [(frame - master_bias) / master_flat for frame in frames.values()]
     expected = np.nanmean(np.asarray(expected_images, dtype=float), axis=0).astype(np.float32)
 
     np.testing.assert_allclose(stacked, expected)
     assert stacked.dtype == np.float32
+
+
+def test_calibrate_and_stack_align_false_can_normalize_before_stack(monkeypatch):
+    frames = {
+        "science_1.fits": np.array([[10, 20], [30, 40]], dtype=float),
+        "science_2.fits": np.array([[20, 40], [60, 80]], dtype=float),
+    }
+    monkeypatch.setattr(stacking, "load_fits", lambda path: (frames[path], {}))
+
+    stacked = stacking.calibrate_and_stack(
+        list(frames),
+        np.zeros((2, 2)),
+        np.ones((2, 2)),
+        align=False,
+        normalize_before_stack=True,
+    )
+
+    expected = frames["science_1.fits"] / np.median(frames["science_1.fits"])
+    np.testing.assert_allclose(stacked, expected.astype(np.float32))
+    assert np.isclose(np.median(stacked), 1.0)
 
 
 def test_calibrate_and_stack_align_false_includes_first_image(monkeypatch):
@@ -73,10 +90,9 @@ def test_calibrate_and_stack_align_false_includes_first_image(monkeypatch):
 
     stacked = stacking.calibrate_and_stack(frames.keys(), np.zeros((2, 2)), np.ones((2, 2)), align=False)
 
-    expected_first_normalized = frames["first.fits"] / np.median(frames["first.fits"])
-    # All three images have the same normalized values. If the first image were
-    # skipped and left as zeros, the old processing.py bug would lower the mean.
-    np.testing.assert_allclose(stacked, expected_first_normalized.astype(np.float32))
+    expected = np.nanmean(np.asarray(list(frames.values()), dtype=float), axis=0).astype(np.float32)
+    # If the first image were skipped and left as zeros, the mean would be lower.
+    np.testing.assert_allclose(stacked, expected)
 
 
 def test_calibrate_and_stack_align_false_does_not_import_astroalign(monkeypatch):
@@ -86,8 +102,7 @@ def test_calibrate_and_stack_align_false_does_not_import_astroalign(monkeypatch)
 
     stacked = stacking.calibrate_and_stack(frames.keys(), np.zeros((2, 2)), np.ones((2, 2)), align=False)
 
-    expected = frames["science.fits"] / np.median(frames["science.fits"])
-    np.testing.assert_allclose(stacked, expected.astype(np.float32))
+    np.testing.assert_allclose(stacked, frames["science.fits"].astype(np.float32))
 
 
 def test_calibrate_and_stack_default_returns_only_stacked_image(monkeypatch):
@@ -123,6 +138,7 @@ def test_calibrate_and_stack_returns_alignment_report_records(monkeypatch):
         min_area=19,
         return_alignment_report=True,
         filter_name="red",
+        normalize_before_stack=True,
     )
 
     assert isinstance(stacked, np.ndarray)
@@ -180,6 +196,7 @@ def test_calibrate_and_stack_alignment_failure_skip_records_failed_and_continues
         np.ones((2, 2)),
         fail_policy="skip",
         return_alignment_report=True,
+        normalize_before_stack=True,
     )
 
     assert isinstance(stacked, np.ndarray)
@@ -209,4 +226,5 @@ def test_calibrate_and_stack_alignment_failure_raise_records_then_raises(monkeyp
             np.ones((2, 2)),
             fail_policy="raise",
             return_alignment_report=True,
+            normalize_before_stack=True,
         )

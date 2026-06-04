@@ -151,6 +151,7 @@ def _mock_pipeline_helpers(monkeypatch):
         fail_policy="raise",
         alignment_method="astroalign",
         detection_sigma=None,
+        normalize_before_stack=False,
     ):
         calls.setdefault("stack_args", {})[Path(science_files[0]).parent.name] = (
             science_files,
@@ -165,6 +166,7 @@ def _mock_pipeline_helpers(monkeypatch):
             fail_policy,
             alignment_method,
             detection_sigma,
+            normalize_before_stack,
         )
         records = [
             {
@@ -223,6 +225,7 @@ def test_run_pipeline_discovers_compact_object_layout(tmp_path, monkeypatch):
             "raise",
             "astroalign",
             None,
+            False,
         )
     assert written == [
         object_dir / "calibrated" / "master_bias.fits",
@@ -302,6 +305,7 @@ def test_run_pipeline_writes_expected_outputs_with_legacy_output_dir(tmp_path, m
         "raise",
         "astroalign",
         None,
+        False,
     )
 
 
@@ -372,6 +376,36 @@ def test_run_pipeline_writes_alignment_report_csv(tmp_path, monkeypatch):
             "min_area": "12",
         }
     ]
+
+
+
+def test_validate_config_stacking_defaults_to_preserve_calibrated_scale(tmp_path):
+    files = _input_files(tmp_path)
+    validated = run_calibration._validate_config(
+        {
+            "bias_files": [str(files["bias"])],
+            "flat_files": {"red": [str(files["flat"])]},
+            "science_files": {"red": [str(files["science"])]},
+            "output_dir": str(tmp_path / "out"),
+        }
+    )
+
+    assert validated["stacking"] == {"normalize_before_stack": False}
+
+
+def test_validate_config_stacking_can_enable_legacy_normalization(tmp_path):
+    files = _input_files(tmp_path)
+    validated = run_calibration._validate_config(
+        {
+            "bias_files": [str(files["bias"])],
+            "flat_files": {"red": [str(files["flat"])]},
+            "science_files": {"red": [str(files["science"])]},
+            "output_dir": str(tmp_path / "out"),
+            "stacking": {"normalize_before_stack": True},
+        }
+    )
+
+    assert validated["stacking"] == {"normalize_before_stack": True}
 
 
 def test_validate_config_channel_alignment_defaults_disabled(tmp_path):
@@ -500,6 +534,23 @@ def test_validate_config_reports_missing_required_input_mode():
         run_calibration._validate_config({"bias_files": ["bias.fits"]})
 
 
+def test_run_pipeline_passes_stacking_normalization_option(tmp_path, monkeypatch):
+    files = _input_files(tmp_path)
+    output_dir = tmp_path / "results"
+    config_path = tmp_path / "config.yaml"
+    _write_legacy_config(config_path, output_dir, files)
+    with config_path.open("a", encoding="utf-8") as config_file:
+        config_file.write(
+            "stacking:\n"
+            "  normalize_before_stack: true\n"
+        )
+    calls, _saved, _master_bias, _master_flat = _mock_pipeline_helpers(monkeypatch)
+
+    run_calibration.run_pipeline(config_path)
+
+    assert calls["stack_args"][tmp_path.name][-1] is True
+
+
 def test_validate_config_diagnostics_defaults_disabled(tmp_path):
     files = _input_files(tmp_path)
     validated = run_calibration._validate_config(
@@ -563,6 +614,7 @@ def test_run_pipeline_triggers_diagnostics_only_when_enabled(tmp_path, monkeypat
     assert call["output_dir"] == output_dir / "diagnostics"
     assert call["config"]["enabled"] is True
     assert call["config"]["random_seed"] == 11
+    assert call["normalize_before_stack"] is False
     assert output_dir / "diagnostics" / "pixel_statistics.csv" in written
 
 

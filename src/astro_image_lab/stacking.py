@@ -108,19 +108,23 @@ def calibrate_and_stack(
     fail_policy="raise",
     alignment_method="astroalign",
     detection_sigma=None,
+    normalize_before_stack=False,
 ):
     """Load, calibrate, optionally align, and stack science FITS images.
 
-    Each science frame is loaded with :func:`astro_image_lab.io.load_fits`,
+    Each science frame is loaded with :func:`astro_image_lab.io.load_fits` and
     calibrated via ``(image - master_bias) / master_flat`` using
-    :func:`astro_image_lab.calibration.calibrate_science_image`, normalized by
-    its median, and then stacked with :func:`stack_images`.
+    :func:`astro_image_lab.calibration.calibrate_science_image`. By default, the
+    final stack preserves that calibrated pixel scale. Set
+    ``normalize_before_stack=True`` to reproduce the original notebook/script
+    behavior of dividing each calibrated frame by its median before stacking.
 
-    When ``align=True``, the first calibrated and normalized science image is
-    used as the registration reference and every subsequent image is aligned to
-    it with ``astroalign.register(..., min_area=min_area)``. The first image is
-    not skipped, correcting the indexing bug in ``doc/processing.py``. The
-    ``sigma`` and ``maxiters`` arguments are forwarded to
+    When ``align=True``, normalized copies are used for source detection and
+    registration. If ``normalize_before_stack`` is false, the transform inferred
+    from the normalized copy is applied to the calibrated image so the final
+    stack remains in calibrated units. The first science image is not skipped,
+    correcting the indexing bug in ``doc/processing.py``. The ``sigma`` and
+    ``maxiters`` arguments are forwarded to
     :func:`astro_image_lab.stacking.stack_images`. Set
     ``return_alignment_report=True`` to return ``(stacked_image, records)``
     instead of just the stacked image.
@@ -138,17 +142,20 @@ def calibrate_and_stack(
     else:
         astroalign = None
 
-    normalized_images = []
+    stack_inputs = []
     report_records = []
-    reference_image = None
+    reference_detection_image = None
+    reference_stack_image = None
 
     for index, path in enumerate(science_files):
         science_data, _header = load_fits(path)
         calibrated = calibrate_science_image(science_data, master_bias, master_flat)
-        normalized = normalize_by_median(calibrated)
+        needs_normalized_copy = align or normalize_before_stack
+        normalized = normalize_by_median(calibrated) if needs_normalized_copy else None
+        stack_image = normalized if normalize_before_stack else calibrated
 
         if not align:
-            normalized_images.append(normalized)
+            stack_inputs.append(stack_image)
             report_records.append(
                 _alignment_report_record(
                     path=path,
@@ -162,9 +169,10 @@ def calibrate_and_stack(
             )
             continue
 
-        if reference_image is None:
-            reference_image = normalized
-            normalized_images.append(normalized)
+        if reference_detection_image is None:
+            reference_detection_image = normalized
+            reference_stack_image = stack_image
+            stack_inputs.append(stack_image)
             report_records.append(
                 _alignment_report_record(
                     path=path,
@@ -182,9 +190,17 @@ def calibrate_and_stack(
         if detection_sigma is not None:
             register_kwargs["detection_sigma"] = detection_sigma
         try:
-            registered_image, _footprint = astroalign.register(
-                normalized, reference_image, **register_kwargs
-            )
+            if normalize_before_stack:
+                registered_image, _footprint = astroalign.register(
+                    normalized, reference_detection_image, **register_kwargs
+                )
+            else:
+                transform, _matched_sources = astroalign.find_transform(
+                    normalized, reference_detection_image, **register_kwargs
+                )
+                registered_image, _footprint = astroalign.apply_transform(
+                    transform, calibrated, reference_stack_image
+                )
         except Exception as exc:
             report_records.append(
                 _alignment_report_record(
@@ -202,7 +218,7 @@ def calibrate_and_stack(
                 raise
             continue
 
-        normalized_images.append(registered_image)
+        stack_inputs.append(registered_image)
         report_records.append(
             _alignment_report_record(
                 path=path,
@@ -216,7 +232,7 @@ def calibrate_and_stack(
         )
 
     stacked_image = stack_images(
-        np.asarray(normalized_images, dtype=float), sigma=sigma, maxiters=maxiters
+        np.asarray(stack_inputs, dtype=float), sigma=sigma, maxiters=maxiters
     )
     if return_alignment_report:
         return stacked_image, report_records
