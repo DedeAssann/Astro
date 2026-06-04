@@ -15,8 +15,9 @@ The scientific goal of V1 is to provide a transparent teaching and portfolio pip
 
 - **FITS I/O helpers** for loading primary-HDU image data and preserving headers when writing derived products.
 - **Calibration helpers** for master-bias creation, normalized master-flat creation, and science-frame calibration.
-- **Stacking and alignment helpers** for median normalization, optional `astroalign` registration, sigma clipping, and mean stacking.
+- **Stacking and alignment helpers** for calibrated-unit stacking by default, optional legacy median normalization, optional `astroalign` registration, sigma clipping, and mean stacking.
 - **YAML-driven CLI pipeline** that validates inputs and writes master calibration products plus stacked science images.
+- **Diagnostics helpers** for calibration and stacking pixel-distribution histograms, robust finite-pixel statistics, reproducible frame sampling, and CSV diagnostics reports.
 - **Visualization and enhancement helpers** for percentile scaling, single-image plots, histograms, before/after comparisons, simple RGB composites, and display-only RGB enhancement with background subtraction, color balancing, asinh stretch, and gamma correction.
 - **Photometry and galaxy-analysis helpers** for circular aperture fluxes, growth curves, effective radius estimates, distance modulus, absolute magnitude conversion, and pixel-to-kpc conversion.
 - **Tests** covering calibration math, stacking behavior, visualization utilities, photometry utilities, and CLI config validation.
@@ -38,6 +39,7 @@ The scientific goal of V1 is to provide a transparent teaching and portfolio pip
 │   └── make_demo_figures.py
 ├── src/astro_image_lab/     # Reusable package modules
 │   ├── calibration.py
+│   ├── diagnostics.py
 │   ├── enhancement.py
 │   ├── io.py
 │   ├── photometry.py
@@ -90,6 +92,15 @@ filters:
   - red
   - green
   - blue
+stacking:
+  normalize_before_stack: false
+diagnostics:
+  enabled: true
+  random_seed: 42
+  bins: 100
+  lower_percentile: 0.5
+  upper_percentile: 99.5
+  max_pixels: 1000000
 ```
 
 The inferred local data layout is:
@@ -111,13 +122,44 @@ data/<OBJECT_NAME>/
 └── analysis/
 ```
 
-The CLI accepts `.fits`, `.fit`, and `.fts` filenames case-insensitively, sorts discovered lists for reproducibility, and creates output directories when needed. For each configured science filter, it writes:
+The CLI accepts `.fits`, `.fit`, and `.fts` filenames case-insensitively, sorts discovered lists for reproducibility, and creates output directories when needed. If `diagnostics.enabled` is true, the pipeline also writes calibration and stacking diagnostic plots under `data/<OBJECT_NAME>/analysis/diagnostics/`. For each configured science filter, it writes:
 
 - `master_bias.fits` to `data/<OBJECT_NAME>/calibrated/`
 - `master_flat_<filter>.fits` to `data/<OBJECT_NAME>/calibrated/`
 - `stacked_<filter>.fits` to `data/<OBJECT_NAME>/stacked/`
 - `alignment_report.csv` to `data/<OBJECT_NAME>/analysis/`
 - When channel alignment is enabled, `stacked/aligned_channels/stacked_<filter>_aligned.fits` and `analysis/channel_alignment_report.csv`
+- When diagnostics are enabled, `analysis/diagnostics/pixel_statistics.csv`, `analysis/diagnostics/bias_frame_statistics.csv`, and histogram/line-plot PNGs for bias, flats, science calibration, optional stacking normalization, and stacking
+
+
+
+### Stacking scale control
+
+The scientific default is to preserve calibrated pixel units in `stacked_<filter>.fits`:
+
+```yaml
+stacking:
+  normalize_before_stack: false
+```
+
+With this setting, science frames are calibrated and then stacked without median-normalizing their pixel values. If frame alignment is enabled, normalized copies may still be used internally to detect sources and estimate the registration transform, but that transform is applied to the calibrated image before stacking so the output remains in calibrated units.
+
+Set `stacking.normalize_before_stack: true` only to reproduce the older notebook/script behavior where each calibrated science frame is divided by its median before stacking; this creates final stacks centered around roughly 1 rather than calibrated ADU-like units.
+
+### Calibration diagnostics
+
+The optional `diagnostics` config section is observational only: it does not modify calibration, alignment, stacking, or RGB enhancement algorithms. When enabled, `scripts/run_calibration.py` creates `data/<OBJECT_NAME>/analysis/diagnostics/` automatically and writes:
+
+- `bias_random_vs_master_hist.png`, comparing one deterministic raw bias frame with `master_bias.fits`.
+- `bias_frame_statistics.csv`, listing `file`, `mean`, `median`, `std`, `min`, `max`, `p1`, `p99`, and `finite_fraction` for every bias frame.
+- `bias_frame_mean_distribution.png`, plotting per-bias-frame mean/median ADU against frame index/file name with horizontal master-bias mean/median reference lines.
+- `flat_<filter>_random_vs_master_hist.png`, comparing one deterministic bias-subtracted, median-normalized flat with `master_flat_<filter>.fits`.
+- `science_<filter>_before_after_calibration_hist.png`, comparing one deterministic raw science frame with the same frame after calibration.
+- `science_<filter>_calibrated_vs_normalized_hist.png` when `stacking.normalize_before_stack: true`, comparing the calibrated sample science frame with its median-normalized copy.
+- `science_<filter>_calibrated_vs_stacked_hist.png`, comparing that calibrated science frame with `stacked_<filter>.fits` and stating whether median normalization was enabled during stacking.
+- `pixel_statistics.csv`, with `stage`, `filter`, `label`, `source_path`, `mean`, `median`, `std`, `min`, `max`, `p1`, `p5`, `p95`, `p99`, `finite_fraction`, and `n_finite` for every plotted array.
+
+Histogram plots use finite pixels only, ignore `NaN` and `Inf`, sample at most `diagnostics.max_pixels` pixels per image using `diagnostics.random_seed`, set x-limits from the configured lower/upper percentiles across both compared distributions, set y-limits from counts inside that x-range, overlay the distributions, and draw dashed vertical mean lines.
 
 Generate PNG demo figures from those stacked FITS products with:
 

@@ -24,6 +24,7 @@ load_fits = None
 save_fits = None
 calibrate_and_stack = None
 align_stacked_channels = None
+run_pipeline_diagnostics = None
 
 EXPLICIT_INPUT_FIELDS = ("bias_files", "flat_files", "science_files")
 COMPACT_INPUT_FIELDS = ("object_name", "data_root", "filters")
@@ -376,6 +377,80 @@ def _normalize_output_dirs(config: dict[str, Any], object_dir: Path | None) -> d
     return {field: object_dir / field for field in OUTPUT_DIR_FIELDS}
 
 
+
+
+def _validate_stacking_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Return normalized stacking options."""
+    stacking = {"normalize_before_stack": False}
+    stacking_config = config.get("stacking")
+    if stacking_config is None:
+        return stacking
+    if not isinstance(stacking_config, dict):
+        raise ConfigError("Config field 'stacking' must be a mapping")
+
+    if "normalize_before_stack" in stacking_config:
+        normalize_before_stack = stacking_config["normalize_before_stack"]
+        if not isinstance(normalize_before_stack, bool):
+            raise ConfigError("Config field 'stacking.normalize_before_stack' must be true or false")
+        stacking["normalize_before_stack"] = normalize_before_stack
+
+    return stacking
+
+def _validate_diagnostics_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Return normalized diagnostics options."""
+    diagnostics = {
+        "enabled": False,
+        "random_seed": 42,
+        "bins": 100,
+        "lower_percentile": 0.5,
+        "upper_percentile": 99.5,
+        "max_pixels": 1_000_000,
+    }
+    diagnostics_config = config.get("diagnostics")
+    if diagnostics_config is None:
+        return diagnostics
+    if not isinstance(diagnostics_config, dict):
+        raise ConfigError("Config field 'diagnostics' must be a mapping")
+
+    if "enabled" in diagnostics_config:
+        enabled = diagnostics_config["enabled"]
+        if not isinstance(enabled, bool):
+            raise ConfigError("Config field 'diagnostics.enabled' must be true or false")
+        diagnostics["enabled"] = enabled
+
+    if "random_seed" in diagnostics_config:
+        random_seed = diagnostics_config["random_seed"]
+        if random_seed is not None and (not isinstance(random_seed, int) or isinstance(random_seed, bool)):
+            raise ConfigError("Config field 'diagnostics.random_seed' must be an integer or null")
+        diagnostics["random_seed"] = random_seed
+
+    if "bins" in diagnostics_config:
+        bins = diagnostics_config["bins"]
+        if not isinstance(bins, int) or isinstance(bins, bool) or bins <= 0:
+            raise ConfigError("Config field 'diagnostics.bins' must be a positive integer")
+        diagnostics["bins"] = bins
+
+    for field in ("lower_percentile", "upper_percentile"):
+        if field in diagnostics_config:
+            percentile = diagnostics_config[field]
+            if not isinstance(percentile, (int, float)) or isinstance(percentile, bool):
+                raise ConfigError(f"Config field 'diagnostics.{field}' must be a number")
+            diagnostics[field] = float(percentile)
+
+    if not 0 <= diagnostics["lower_percentile"] < diagnostics["upper_percentile"] <= 100:
+        raise ConfigError(
+            "Config fields 'diagnostics.lower_percentile' and 'diagnostics.upper_percentile' "
+            "must satisfy 0 <= lower < upper <= 100"
+        )
+
+    if "max_pixels" in diagnostics_config:
+        max_pixels = diagnostics_config["max_pixels"]
+        if not isinstance(max_pixels, int) or isinstance(max_pixels, bool) or max_pixels <= 0:
+            raise ConfigError("Config field 'diagnostics.max_pixels' must be a positive integer")
+        diagnostics["max_pixels"] = max_pixels
+
+    return diagnostics
+
 def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
     """Validate config shape, discover compact inputs, and fill optional defaults."""
     has_explicit_inputs = all(field in config for field in EXPLICIT_INPUT_FIELDS)
@@ -433,6 +508,8 @@ def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
 
     alignment = _validate_alignment_config(config)
     channel_alignment = _validate_channel_alignment_config(config)
+    stacking = _validate_stacking_config(config)
+    diagnostics = _validate_diagnostics_config(config)
 
     sigma = config.get("sigma", 2)
     if not isinstance(sigma, (int, float)) or sigma <= 0:
@@ -452,6 +529,8 @@ def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
         "align": alignment["enabled"],
         "alignment": alignment,
         "channel_alignment": channel_alignment,
+        "stacking": stacking,
+        "diagnostics": diagnostics,
         "sigma": sigma,
         "maxiters": maxiters,
     }
@@ -477,7 +556,7 @@ def _ensure_input_files_exist(paths: list[Path]) -> None:
 def _get_pipeline_functions():
     """Import pipeline helpers lazily after config and file validation."""
     global make_master_bias, make_master_flat, load_fits, save_fits
-    global calibrate_and_stack, align_stacked_channels
+    global calibrate_and_stack, align_stacked_channels, run_pipeline_diagnostics
     if make_master_bias is None or make_master_flat is None:
         from astro_image_lab.calibration import make_master_bias as imported_make_master_bias
         from astro_image_lab.calibration import make_master_flat as imported_make_master_flat
@@ -500,6 +579,12 @@ def _get_pipeline_functions():
         )
 
         align_stacked_channels = imported_align_stacked_channels
+    if run_pipeline_diagnostics is None:
+        from astro_image_lab.diagnostics import (
+            run_pipeline_diagnostics as imported_run_pipeline_diagnostics,
+        )
+
+        run_pipeline_diagnostics = imported_run_pipeline_diagnostics
     return (
         make_master_bias,
         make_master_flat,
@@ -507,6 +592,7 @@ def _get_pipeline_functions():
         save_fits,
         calibrate_and_stack,
         align_stacked_channels,
+        run_pipeline_diagnostics,
     )
 
 
@@ -559,6 +645,7 @@ def run_pipeline(config_path: Path) -> list[Path]:
         fits_saver,
         stack_science,
         align_channels,
+        diagnose_pipeline,
     ) = _get_pipeline_functions()
 
     output_dirs = config["output_dirs"]
@@ -568,6 +655,9 @@ def run_pipeline(config_path: Path) -> list[Path]:
     written_files: list[Path] = []
     alignment_report_records: list[dict[str, Any]] = []
     stacked_paths: dict[str, Path] = {}
+    master_flats: dict[str, Any] = {}
+    master_flat_paths: dict[str, Path] = {}
+    stacked_images: dict[str, Any] = {}
 
     master_bias = make_bias(config["bias_files"])
     _bias_data, bias_header = fits_loader(config["bias_files"][0])
@@ -582,6 +672,8 @@ def run_pipeline(config_path: Path) -> list[Path]:
         master_flat_path = output_dirs["calibrated"] / f"master_flat_{filter_name}.fits"
         fits_saver(master_flat, flat_header, master_flat_path)
         written_files.append(master_flat_path)
+        master_flats[filter_name] = master_flat
+        master_flat_paths[filter_name] = master_flat_path
         print(f"Wrote {master_flat_path}")
 
         alignment = config["alignment"]
@@ -598,6 +690,7 @@ def run_pipeline(config_path: Path) -> list[Path]:
             fail_policy=alignment["fail_policy"],
             alignment_method=alignment["method"],
             detection_sigma=alignment["detection_sigma"],
+            normalize_before_stack=config["stacking"]["normalize_before_stack"],
         )
         alignment_report_records.extend(filter_report_records)
         _science_data, science_header = fits_loader(config["science_files"][filter_name][0])
@@ -605,7 +698,29 @@ def run_pipeline(config_path: Path) -> list[Path]:
         fits_saver(stacked_image, science_header, stacked_path)
         written_files.append(stacked_path)
         stacked_paths[filter_name] = stacked_path
+        stacked_images[filter_name] = stacked_image
         print(f"Wrote {stacked_path}")
+
+    diagnostics = config["diagnostics"]
+    if diagnostics["enabled"]:
+        diagnostics_dir = output_dirs["analysis"] / "diagnostics"
+        diagnostic_files = diagnose_pipeline(
+            bias_files=config["bias_files"],
+            flat_files=config["flat_files"],
+            science_files=config["science_files"],
+            master_bias=master_bias,
+            master_bias_path=master_bias_path,
+            master_flats=master_flats,
+            master_flat_paths=master_flat_paths,
+            stacked_images=stacked_images,
+            stacked_paths=stacked_paths,
+            output_dir=diagnostics_dir,
+            config=diagnostics,
+            normalize_before_stack=config["stacking"]["normalize_before_stack"],
+        )
+        written_files.extend(diagnostic_files)
+        for diagnostic_file in diagnostic_files:
+            print(f"Wrote {diagnostic_file}")
 
     channel_alignment = config["channel_alignment"]
     if channel_alignment["enabled"]:
