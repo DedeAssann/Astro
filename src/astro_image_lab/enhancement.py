@@ -12,6 +12,8 @@ import numpy as np
 _DISPLAY_SCALES = {"linear", "squared", "cubed", "sqrt", "log", "asinh", "gamma"}
 _LIMIT_MODES = {"zscale", "percentile"}
 _CHANNEL_MODES = {"per-channel", "global"}
+_BACKGROUND_NEUTRALIZATION_MODES = {"none", "subtract", "equalize"}
+_COLOR_BALANCE_METHODS = {"none", "background", "median", "max"}
 
 
 def _finite_values(image: np.ndarray) -> np.ndarray:
@@ -228,6 +230,117 @@ def crop_image(image, center=None, size=None) -> np.ndarray:
     return array[y0:y1, x0:x1, ...] if array.ndim == 3 else array[y0:y1, x0:x1]
 
 
+def estimate_channel_background(channel, percentile=10) -> float:
+    """Estimate one channel's finite-pixel display background percentile.
+
+    Non-finite pixels are ignored. All-non-finite channels return ``0.0`` so
+    color-neutralization steps can remain safe on masked or empty previews.
+    """
+    finite_values = _finite_values(channel)
+    if finite_values.size == 0:
+        return 0.0
+    return float(np.percentile(finite_values, percentile))
+
+
+def _as_rgb_array(rgb) -> np.ndarray:
+    """Return a finite-safe RGB float array clipped to display range."""
+    rgb = np.asarray(rgb, dtype=float)
+    if rgb.ndim != 3 or rgb.shape[-1] != 3:
+        raise ValueError("rgb must have shape (height, width, 3)")
+    rgb = np.nan_to_num(rgb, nan=0.0, posinf=1.0, neginf=0.0)
+    return np.clip(rgb, 0.0, 1.0)
+
+
+def _rgb_backgrounds(rgb: np.ndarray, percentile=10) -> np.ndarray:
+    """Return finite display-background estimates for RGB channels."""
+    return np.array(
+        [
+            estimate_channel_background(rgb[..., channel], percentile=percentile)
+            for channel in range(3)
+        ],
+        dtype=float,
+    )
+
+
+def neutralize_rgb_background(rgb, percentile=10, mode="subtract") -> np.ndarray:
+    """Neutralize RGB display backgrounds without modifying FITS data.
+
+    ``subtract`` removes each channel's background estimate independently.
+    ``equalize`` shifts channels so those estimates match their median value.
+    ``none`` returns the finite-safe clipped RGB image unchanged.
+    """
+    if mode not in _BACKGROUND_NEUTRALIZATION_MODES:
+        raise ValueError(f"mode must be one of {sorted(_BACKGROUND_NEUTRALIZATION_MODES)}")
+    safe_rgb = _as_rgb_array(rgb)
+    if mode == "none":
+        return safe_rgb
+
+    backgrounds = _rgb_backgrounds(safe_rgb, percentile=percentile)
+    if mode == "subtract":
+        neutralized = safe_rgb - backgrounds.reshape(1, 1, 3)
+    else:  # equalize
+        target = float(np.median(backgrounds[np.isfinite(backgrounds)]))
+        neutralized = safe_rgb + (target - backgrounds).reshape(1, 1, 3)
+    return np.clip(neutralized, 0.0, 1.0)
+
+
+def _positive_channel_stat(channel: np.ndarray, method: str, percentile=10) -> float:
+    """Return the statistic used for RGB channel balancing."""
+    finite_values = channel[np.isfinite(channel)]
+    if finite_values.size == 0:
+        return 0.0
+    if method == "background":
+        statistic = np.percentile(finite_values, percentile)
+    elif method == "median":
+        statistic = np.median(finite_values)
+    elif method == "max":
+        statistic = np.percentile(finite_values, 99.5)
+        if not np.isfinite(statistic) or statistic <= 0:
+            statistic = np.max(finite_values)
+    else:
+        raise ValueError(f"method must be one of {sorted(_COLOR_BALANCE_METHODS)}")
+    if not np.isfinite(statistic) or statistic <= 0:
+        return 0.0
+    return float(statistic)
+
+
+def rgb_channel_balance_factors(rgb: np.ndarray, method="background", percentile=10) -> np.ndarray:
+    """Return safe multiplicative channel factors for display RGB balancing."""
+    if method not in _COLOR_BALANCE_METHODS:
+        raise ValueError(f"method must be one of {sorted(_COLOR_BALANCE_METHODS)}")
+    if method == "none":
+        return np.ones(3, dtype=float)
+
+    stats = np.array(
+        [
+            _positive_channel_stat(rgb[..., channel], method, percentile=percentile)
+            for channel in range(3)
+        ],
+        dtype=float,
+    )
+    valid_stats = stats[np.isfinite(stats) & (stats > 0)]
+    if valid_stats.size == 0:
+        return np.ones(3, dtype=float)
+    target = float(np.median(valid_stats))
+    factors = np.ones(3, dtype=float)
+    valid_mask = np.isfinite(stats) & (stats > 0)
+    factors[valid_mask] = target / stats[valid_mask]
+    return factors
+
+
+def balance_rgb_channels(rgb, method="background", percentile=10) -> np.ndarray:
+    """Balance RGB display channel levels and keep values in ``[0, 1]``.
+
+    ``background`` scales channels so finite background percentiles match,
+    ``median`` matches channel medians, ``max`` matches high-percentile highlight
+    levels, and ``none`` leaves the finite-safe clipped RGB image unchanged.
+    Channels with zero or invalid statistics receive a factor of one.
+    """
+    safe_rgb = _as_rgb_array(rgb)
+    factors = rgb_channel_balance_factors(safe_rgb, method=method, percentile=percentile)
+    return np.clip(safe_rgb * factors.reshape(1, 1, 3), 0.0, 1.0)
+
+
 def _limits_for_channel(channel, limits, lower, upper, zscale_contrast) -> tuple[float, float]:
     if limits == "zscale":
         return zscale_limits(channel, contrast=zscale_contrast)
@@ -248,8 +361,16 @@ def make_display_rgb(
     gamma=1.0,
     stretch=5.0,
     channel_mode="per-channel",
+    background_neutralization="none",
+    background_percentile=10,
+    color_balance="none",
 ) -> np.ndarray:
-    """Create a display-scaled RGB preview clipped to ``[0, 1]``."""
+    """Create a display-scaled RGB preview clipped to ``[0, 1]``.
+
+    Processing order is: channel limit scaling, optional RGB background
+    neutralization, optional channel balancing, display-scale transform, and
+    final clipping. All steps are display-only and operate on normalized arrays.
+    """
     if channel_mode not in _CHANNEL_MODES:
         raise ValueError(f"channel_mode must be one of {sorted(_CHANNEL_MODES)}")
     channels = [np.asarray(channel, dtype=float) for channel in (red, green, blue)]
@@ -266,15 +387,18 @@ def make_display_rgb(
             for channel in channels
         ]
     scaled_channels = [
-        apply_display_scale(
-            scale_to_limits(channel, vmin, vmax),
-            scale=scale,
-            gamma=gamma,
-            stretch=stretch,
-        )
+        scale_to_limits(channel, vmin, vmax)
         for channel, (vmin, vmax) in zip(channels, limit_pairs)
     ]
-    return np.clip(np.dstack(scaled_channels), 0.0, 1.0)
+    rgb = np.clip(np.dstack(scaled_channels), 0.0, 1.0)
+    rgb = neutralize_rgb_background(
+        rgb,
+        percentile=background_percentile,
+        mode=background_neutralization,
+    )
+    rgb = balance_rgb_channels(rgb, method=color_balance, percentile=background_percentile)
+    rgb = apply_display_scale(rgb, scale=scale, gamma=gamma, stretch=stretch)
+    return np.clip(rgb, 0.0, 1.0)
 
 
 def make_processed_rgb(
@@ -294,6 +418,9 @@ def make_processed_rgb(
     smooth_sigma=None,
     unsharp_sigma=None,
     unsharp_amount=None,
+    background_neutralization="none",
+    background_percentile=10,
+    color_balance="none",
 ) -> np.ndarray:
     """Build a display RGB image with optional galaxy crop and post-processing.
 
@@ -315,6 +442,9 @@ def make_processed_rgb(
         gamma=gamma,
         stretch=stretch,
         channel_mode=channel_mode,
+        background_neutralization=background_neutralization,
+        background_percentile=background_percentile,
+        color_balance=color_balance,
     )
     if smooth_sigma is not None:
         rgb = np.clip(gaussian_smooth(rgb, sigma=smooth_sigma), 0.0, 1.0)
@@ -328,10 +458,7 @@ def make_processed_rgb(
 # Existing enhancement helpers retained for compatibility.
 def estimate_background(image, percentile=10) -> float:
     """Estimate a scalar background level from finite pixels."""
-    finite_values = _finite_values(image)
-    if finite_values.size == 0:
-        return 0.0
-    return float(np.percentile(finite_values, percentile))
+    return estimate_channel_background(image, percentile=percentile)
 
 
 def subtract_background(image, percentile=10) -> np.ndarray:

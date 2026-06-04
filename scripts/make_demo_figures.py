@@ -117,6 +117,83 @@ def _crop_method_suffix(smooth_sigma, unsharp_sigma, unsharp_amount) -> str:
     return ""
 
 
+def _scaled_rgb_for_color_log(
+    rgb_channel_data: dict[str, object],
+    limits: str,
+    zscale_contrast: float,
+    lower: float,
+    upper: float,
+    crop_center=None,
+    crop_size=None,
+):
+    """Build a linear normalized RGB image for color-adjustment logging."""
+    red = enhancement.crop_image(rgb_channel_data["red"], center=crop_center, size=crop_size)
+    green = enhancement.crop_image(rgb_channel_data["green"], center=crop_center, size=crop_size)
+    blue = enhancement.crop_image(rgb_channel_data["blue"], center=crop_center, size=crop_size)
+    return enhancement.make_display_rgb(
+        red,
+        green,
+        blue,
+        limits=limits,
+        scale="linear",
+        zscale_contrast=zscale_contrast,
+        lower=lower,
+        upper=upper,
+        background_neutralization="none",
+        color_balance="none",
+    )
+
+
+def _print_color_adjustment_log(
+    label: str,
+    rgb_channel_data: dict[str, object],
+    limits: str,
+    zscale_contrast: float,
+    lower: float,
+    upper: float,
+    background_neutralization: str,
+    background_percentile: float,
+    color_balance: str,
+    crop_center=None,
+    crop_size=None,
+) -> None:
+    """Print background estimates and balance factors when RGB color controls are active."""
+    if background_neutralization == "none" and color_balance == "none":
+        return
+
+    scaled_rgb = _scaled_rgb_for_color_log(
+        rgb_channel_data,
+        limits=limits,
+        zscale_contrast=zscale_contrast,
+        lower=lower,
+        upper=upper,
+        crop_center=crop_center,
+        crop_size=crop_size,
+    )
+    backgrounds = [
+        enhancement.estimate_channel_background(scaled_rgb[..., channel], background_percentile)
+        for channel in range(3)
+    ]
+    neutralized = enhancement.neutralize_rgb_background(
+        scaled_rgb,
+        percentile=background_percentile,
+        mode=background_neutralization,
+    )
+    balance_factors = enhancement.rgb_channel_balance_factors(
+        neutralized,
+        method=color_balance,
+        percentile=background_percentile,
+    )
+    background_text = ", ".join(
+        f"{name}={value:.6g}" for name, value in zip(("red", "green", "blue"), backgrounds)
+    )
+    factor_text = ", ".join(
+        f"{name}={value:.6g}" for name, value in zip(("red", "green", "blue"), balance_factors)
+    )
+    print(f"{label} background estimates ({background_percentile:g}th percentile): {background_text}")
+    print(f"{label} color balance factors ({color_balance}): {factor_text}")
+
+
 def _make_galaxy_detail_grid(
     rgb_channel_data: dict[str, object],
     output_path: Path,
@@ -130,6 +207,9 @@ def _make_galaxy_detail_grid(
     smooth_sigma: float = 0.8,
     unsharp_sigma: float = 2.0,
     unsharp_amount: float = 0.6,
+    background_neutralization: str = "none",
+    background_percentile: float = 10,
+    color_balance: str = "none",
 ) -> Path:
     """Create the six-panel galaxy detail grid requested by the CLI."""
     panels = [
@@ -160,6 +240,9 @@ def _make_galaxy_detail_grid(
             stretch=stretch,
             crop_center=crop_center,
             crop_size=crop_size,
+            background_neutralization=background_neutralization,
+            background_percentile=background_percentile,
+            color_balance=color_balance,
             **panel_kwargs,
         )
         ax.imshow(rgb, origin="lower")
@@ -179,6 +262,9 @@ def _make_galaxy_detail_grid(
         unsharp_amount=unsharp_amount,
         gamma=gamma,
         stretch=stretch,
+        background_neutralization=background_neutralization,
+        background_percentile=background_percentile,
+        color_balance=color_balance,
     )
     return output_path
 
@@ -203,6 +289,8 @@ def make_demo_figures(
     crop_center: list[float] | tuple[float, float] | None = None,
     crop_size: float | None = None,
     galaxy_detail_grid: bool = False,
+    background_neutralization: str = "none",
+    color_balance: str = "none",
 ) -> list[Path]:
     """Create PNG demo figures from stacked FITS files for one object.
 
@@ -287,6 +375,9 @@ def make_demo_figures(
                 upper=upper,
                 gamma=gamma,
                 stretch=stretch,
+                background_neutralization=background_neutralization,
+                background_percentile=background_percentile,
+                color_balance=color_balance,
             )
             _save_rgb(
                 figures_dir / "rgb_composite_ds9like.png",
@@ -298,6 +389,20 @@ def make_demo_figures(
                 zscale_contrast=zscale_contrast,
                 gamma=gamma,
                 stretch=stretch,
+                background_neutralization=background_neutralization,
+                background_percentile=background_percentile,
+                color_balance=color_balance,
+            )
+            _print_color_adjustment_log(
+                "ds9like",
+                rgb_channel_data,
+                limits="zscale",
+                zscale_contrast=zscale_contrast,
+                lower=lower,
+                upper=upper,
+                background_neutralization=background_neutralization,
+                background_percentile=background_percentile,
+                color_balance=color_balance,
             )
 
         if rgb_scale is not None:
@@ -312,6 +417,9 @@ def make_demo_figures(
                 upper=upper,
                 gamma=gamma,
                 stretch=stretch,
+                background_neutralization=background_neutralization,
+                background_percentile=background_percentile,
+                color_balance=color_balance,
             )
             _save_rgb(
                 figures_dir / f"rgb_composite_{rgb_limits}_{rgb_scale}.png",
@@ -325,6 +433,20 @@ def make_demo_figures(
                 upper=upper,
                 gamma=gamma,
                 stretch=stretch,
+                background_neutralization=background_neutralization,
+                background_percentile=background_percentile,
+                color_balance=color_balance,
+            )
+            _print_color_adjustment_log(
+                "rgb-scale",
+                rgb_channel_data,
+                limits=rgb_limits,
+                zscale_contrast=zscale_contrast,
+                lower=lower,
+                upper=upper,
+                background_neutralization=background_neutralization,
+                background_percentile=background_percentile,
+                color_balance=color_balance,
             )
 
         crop_requested = crop_center is not None or crop_size is not None
@@ -353,6 +475,9 @@ def make_demo_figures(
                     smooth_sigma=smooth_sigma,
                     unsharp_sigma=unsharp_sigma,
                     unsharp_amount=unsharp_amount,
+                    background_neutralization=background_neutralization,
+                    background_percentile=background_percentile,
+                    color_balance=color_balance,
                 )
                 _save_rgb(
                     figures_dir / f"rgb_crop_{rgb_limits}_{crop_scale}{suffix}.png",
@@ -368,6 +493,22 @@ def make_demo_figures(
                     unsharp_amount=unsharp_amount,
                     gamma=gamma,
                     stretch=stretch,
+                    background_neutralization=background_neutralization,
+                    background_percentile=background_percentile,
+                    color_balance=color_balance,
+                )
+                _print_color_adjustment_log(
+                    "crop",
+                    rgb_channel_data,
+                    limits=rgb_limits,
+                    zscale_contrast=zscale_contrast,
+                    lower=lower,
+                    upper=upper,
+                    background_neutralization=background_neutralization,
+                    background_percentile=background_percentile,
+                    color_balance=color_balance,
+                    crop_center=crop_center,
+                    crop_size=crop_size,
                 )
 
         if galaxy_detail_grid:
@@ -386,8 +527,24 @@ def make_demo_figures(
                 smooth_sigma=0.8 if smooth_sigma is None else smooth_sigma,
                 unsharp_sigma=2.0 if unsharp_sigma is None else unsharp_sigma,
                 unsharp_amount=0.6 if unsharp_amount is None else unsharp_amount,
+                background_neutralization=background_neutralization,
+                background_percentile=background_percentile,
+                color_balance=color_balance,
             )
             written_paths.append(grid_path)
+            _print_color_adjustment_log(
+                "galaxy-detail-grid",
+                rgb_channel_data,
+                limits="zscale",
+                zscale_contrast=zscale_contrast,
+                lower=lower,
+                upper=upper,
+                background_neutralization=background_neutralization,
+                background_percentile=background_percentile,
+                color_balance=color_balance,
+                crop_center=crop_center,
+                crop_size=crop_size,
+            )
 
     return written_paths
 
@@ -435,7 +592,19 @@ def _build_parser() -> argparse.ArgumentParser:
         "--background-percentile",
         type=float,
         default=10,
-        help="Finite-pixel percentile subtracted as background per RGB channel (default: 10).",
+        help="Finite-pixel background percentile for RGB enhancement and color controls (default: 10).",
+    )
+    parser.add_argument(
+        "--background-neutralization",
+        choices=["none", "subtract", "equalize"],
+        default="none",
+        help="Optional display RGB background neutralization (default: none).",
+    )
+    parser.add_argument(
+        "--color-balance",
+        choices=["none", "background", "median", "max"],
+        default="none",
+        help="Optional display RGB channel balancing method (default: none).",
     )
     parser.add_argument(
         "--lower",
@@ -534,6 +703,8 @@ def main(argv: list[str] | None = None) -> int:
             crop_center=args.crop_center,
             crop_size=args.crop_size,
             galaxy_detail_grid=args.galaxy_detail_grid,
+            background_neutralization=args.background_neutralization,
+            color_balance=args.color_balance,
         )
     except DemoFigureError as exc:
         parser.error(str(exc))

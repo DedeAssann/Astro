@@ -19,7 +19,7 @@ The scientific goal of V1 is to provide a transparent teaching and portfolio pip
 - **YAML-driven CLI pipeline** that validates inputs and writes master calibration products plus stacked science images.
 - **Calibration QC diagnostics** for per-frame bias statistics, bias ADU-regime warnings, flat exposure-time linearity curves, saturation checks, and CSV/PNG reports before master-flat stacking.
 - **Diagnostics helpers** for calibration and stacking pixel-distribution histograms, robust finite-pixel statistics, reproducible frame sampling, and CSV diagnostics reports.
-- **Visualization and enhancement helpers** for percentile scaling, single-image plots, histograms, before/after comparisons, simple RGB composites, display-only RGB enhancement, DS9-like zscale limits, linear/squared/cubed/sqrt/log/asinh/gamma display scales, Gaussian smoothing, unsharp masking, and galaxy-centered crop products.
+- **Visualization and enhancement helpers** for percentile scaling, single-image plots, histograms, before/after comparisons, simple RGB composites, display-only RGB enhancement, DS9-like zscale limits, RGB background neutralization/color balancing, linear/squared/cubed/sqrt/log/asinh/gamma display scales, Gaussian smoothing, unsharp masking, and galaxy-centered crop products.
 - **Photometry and galaxy-analysis helpers** for circular aperture fluxes, growth curves, effective radius estimates, distance modulus, absolute magnitude conversion, and pixel-to-kpc conversion.
 - **Tests** covering calibration math, stacking behavior, visualization utilities, photometry utilities, and CLI config validation.
 
@@ -213,11 +213,12 @@ For DS9-style display previews of M83-like galaxies, use zscale display limits w
 python scripts/make_demo_figures.py --object M83 --ds9like
 ```
 
-This keeps the baseline `rgb_composite.png` and adds `rgb_composite_ds9like.png`. You can also request named display-scale composites with `--rgb-limits zscale|percentile` and `--rgb-scale linear|squared|cubed|sqrt|log|asinh|gamma`; for example:
+This keeps the baseline `rgb_composite.png` and adds `rgb_composite_ds9like.png`. If the zscale+squared/cubed display background looks too violet or blue, add display-only color controls such as `--background-neutralization equalize --color-balance background` to make the RGB background percentiles more neutral while preserving the rest of the display stretch. The script prints per-channel background estimates and balance factors whenever these controls are active. You can also request named display-scale composites with `--rgb-limits zscale|percentile` and `--rgb-scale linear|squared|cubed|sqrt|log|asinh|gamma`; for example:
 
 ```bash
 python scripts/make_demo_figures.py --object M83 \
-  --rgb-limits zscale --rgb-scale cubed --zscale-contrast 0.25
+  --rgb-limits zscale --rgb-scale cubed --zscale-contrast 0.25 \
+  --background-neutralization equalize --color-balance background
 ```
 
 Galaxy-detail products crop the raw stacked/aligned red, green, and blue channels before display limits, display scales, Gaussian smoothing, or unsharp masking are applied. The crop center is provided as `X Y` display coordinates (column, row); bounds are clipped safely at image edges. Examples:

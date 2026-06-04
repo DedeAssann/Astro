@@ -197,3 +197,53 @@ def test_unsharp_mask_changes_synthetic_image_and_preserves_shape_and_range():
     assert sharpened.shape == image.shape
     assert np.all((0 <= sharpened) & (sharpened <= 1))
     assert not np.allclose(sharpened, image * 0)
+
+
+def test_neutralize_rgb_background_makes_tinted_background_more_neutral():
+    rgb = np.zeros((6, 6, 3), dtype=float)
+    rgb[..., 0] = 0.10
+    rgb[..., 1] = 0.20
+    rgb[..., 2] = 0.40
+    rgb[3, 3] = [0.8, 0.7, 0.6]
+
+    neutralized = enhancement.neutralize_rgb_background(rgb, percentile=10, mode="equalize")
+    backgrounds = [
+        enhancement.estimate_channel_background(neutralized[..., channel], percentile=10)
+        for channel in range(3)
+    ]
+
+    assert max(backgrounds) - min(backgrounds) < 1e-12
+    assert np.all((0 <= neutralized) & (neutralized <= 1))
+
+
+def test_balance_rgb_channels_avoids_division_by_zero():
+    rgb = np.zeros((4, 4, 3), dtype=float)
+    rgb[..., 0] = 0.0
+    rgb[..., 1] = 0.2
+    rgb[..., 2] = 0.4
+
+    balanced = enhancement.balance_rgb_channels(rgb, method="background", percentile=10)
+
+    assert balanced.shape == rgb.shape
+    assert np.all(np.isfinite(balanced))
+    assert np.all((0 <= balanced) & (balanced <= 1))
+
+
+def test_make_display_rgb_with_color_balance_options_returns_valid_image():
+    base = np.arange(25, dtype=float).reshape(5, 5)
+
+    rgb = enhancement.make_display_rgb(
+        base,
+        base * 1.5,
+        base * 2.0,
+        limits="percentile",
+        lower=0,
+        upper=100,
+        background_neutralization="equalize",
+        background_percentile=10,
+        color_balance="max",
+    )
+
+    assert rgb.shape == (5, 5, 3)
+    assert np.all(np.isfinite(rgb))
+    assert np.all((0 <= rgb) & (rgb <= 1))

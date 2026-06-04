@@ -277,3 +277,31 @@ def test_galaxy_detail_grid_is_written_when_requested(tmp_path, monkeypatch):
     grid_path = data_root / "M83" / "figures" / "galaxy_detail_grid.png"
     assert grid_path in written
     assert grid_path.is_file()
+
+
+def test_cli_accepts_rgb_background_and_color_balance_options(tmp_path, monkeypatch, capsys):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("blue", "green", "red"))
+    _mock_load_fits(monkeypatch)
+
+    exit_code = make_demo_figures.main(
+        [
+            "--object",
+            "M83",
+            "--data-root",
+            str(data_root),
+            "--ds9like",
+            "--background-neutralization",
+            "equalize",
+            "--background-percentile",
+            "10",
+            "--color-balance",
+            "background",
+        ]
+    )
+
+    assert exit_code == 0
+    assert (data_root / "M83" / "figures" / "rgb_composite_ds9like.png").is_file()
+    stdout = capsys.readouterr().out
+    assert "ds9like background estimates" in stdout
+    assert "ds9like color balance factors" in stdout
