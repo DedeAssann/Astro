@@ -10,9 +10,59 @@ from astro_image_lab import channel_alignment
 
 
 def test_choose_reference_filter_prefers_green_then_first_available():
+    assert channel_alignment.choose_reference_filter(["red", "green", "blue"]) == "green"
     assert channel_alignment.choose_reference_filter(["red", "green", "blue"], None) == "green"
+    assert channel_alignment.choose_reference_filter(["red", "blue"]) == "blue"
     assert channel_alignment.choose_reference_filter(["red", "blue"], None) == "blue"
     assert channel_alignment.choose_reference_filter(["red", "blue"], "red") == "red"
+
+
+def test_ensure_native_float_array_converts_big_endian_and_preserves_nan():
+    big_endian = np.array([[1.0, np.nan], [3.0, 4.0]], dtype=">f8")
+
+    native = channel_alignment.ensure_native_float_array(big_endian)
+
+    assert native.dtype == np.dtype("float64")
+    assert native.dtype.isnative
+    assert np.isnan(native[0, 1])
+    assert native[1, 0] == 3.0
+
+
+def test_align_stacked_channels_register_receives_native_float_arrays(monkeypatch, tmp_path):
+    stacked_paths = {
+        "blue": tmp_path / "stacked_blue.fits",
+        "green": tmp_path / "stacked_green.fits",
+    }
+    frames = {
+        stacked_paths["blue"]: np.array([[1.0, np.nan], [3.0, 4.0]], dtype=">f8"),
+        stacked_paths["green"]: np.array([[5.0, 6.0], [np.nan, 8.0]], dtype=">f8"),
+    }
+    registered_dtypes = []
+
+    class FakeAstroalign:
+        @staticmethod
+        def register(image, reference, **kwargs):
+            registered_dtypes.append((image.dtype, reference.dtype))
+            assert image.dtype.isnative
+            assert reference.dtype.isnative
+            assert image.dtype.kind == "f"
+            assert reference.dtype.kind == "f"
+            assert np.isnan(image[0, 1])
+            assert np.isnan(reference[1, 0])
+            return image, np.zeros_like(image, dtype=bool)
+
+    monkeypatch.setitem(sys.modules, "astroalign", FakeAstroalign)
+    monkeypatch.setattr(channel_alignment, "load_fits", lambda path: (frames[Path(path)], {}))
+    monkeypatch.setattr(channel_alignment, "save_fits", lambda *args, **kwargs: None)
+
+    records = channel_alignment.align_stacked_channels(
+        stacked_paths,
+        tmp_path / "aligned_channels",
+        reference_filter="green",
+    )
+
+    assert [record["status"] for record in records] == ["aligned", "reference"]
+    assert registered_dtypes == [(np.dtype("float64"), np.dtype("float64"))]
 
 
 def test_align_stacked_channels_writes_reference_and_aligned_outputs(monkeypatch, tmp_path):
@@ -123,3 +173,38 @@ def test_align_stacked_channels_failure_raise_raises(monkeypatch, tmp_path):
             reference_filter="green",
             fail_policy="raise",
         )
+
+
+def test_align_stacked_channels_default_reference_falls_back_when_green_absent(monkeypatch, tmp_path):
+    stacked_paths = {
+        "blue": tmp_path / "stacked_blue.fits",
+        "red": tmp_path / "stacked_red.fits",
+    }
+    frames = {path: np.ones((2, 2), dtype=float) for path in stacked_paths.values()}
+    saved = []
+
+    class FakeAstroalign:
+        @staticmethod
+        def register(image, reference, **kwargs):
+            return image, np.zeros_like(image, dtype=bool)
+
+    monkeypatch.setitem(sys.modules, "astroalign", FakeAstroalign)
+    monkeypatch.setattr(channel_alignment, "load_fits", lambda path: (frames[Path(path)], {}))
+    monkeypatch.setattr(
+        channel_alignment,
+        "save_fits",
+        lambda data, header, path, overwrite=True: saved.append(Path(path)),
+    )
+
+    records = channel_alignment.align_stacked_channels(
+        stacked_paths,
+        tmp_path / "aligned_channels",
+    )
+
+    assert [record["filter"] for record in records] == ["blue", "red"]
+    assert [record["status"] for record in records] == ["reference", "aligned"]
+    assert all(record["reference_filter"] == "blue" for record in records)
+    assert saved == [
+        tmp_path / "aligned_channels" / "stacked_blue_aligned.fits",
+        tmp_path / "aligned_channels" / "stacked_red_aligned.fits",
+    ]
