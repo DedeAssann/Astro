@@ -196,3 +196,54 @@ def test_cli_filters_limit_generated_outputs(tmp_path, monkeypatch, capsys):
     assert capsys.readouterr().out.splitlines() == [str(path) for path in expected]
     assert all(path.is_file() for path in expected)
     assert not (data_root / "M83" / "figures" / "rgb_composite.png").exists()
+
+
+def test_enhance_rgb_writes_enhanced_composite_when_enabled(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("blue", "green", "red"))
+    _mock_load_fits(monkeypatch)
+
+    written = make_demo_figures.make_demo_figures(
+        "M83",
+        data_root=data_root,
+        enhance_rgb=True,
+        stretch=4.0,
+        gamma=1.2,
+        background_percentile=5,
+        lower=0,
+        upper=100,
+    )
+
+    enhanced_path = data_root / "M83" / "figures" / "rgb_composite_enhanced.png"
+    assert enhanced_path in written
+    assert enhanced_path.is_file()
+
+
+def test_cli_enhance_rgb_writes_enhanced_composite(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("blue", "green", "red"))
+    _mock_load_fits(monkeypatch)
+
+    exit_code = make_demo_figures.main(
+        [
+            "--object",
+            "M83",
+            "--data-root",
+            str(data_root),
+            "--enhance-rgb",
+            "--stretch",
+            "4.0",
+            "--gamma",
+            "1.2",
+            "--background-percentile",
+            "5",
+            "--lower",
+            "0",
+            "--upper",
+            "100",
+        ]
+    )
+
+    assert exit_code == 0
+    assert (data_root / "M83" / "figures" / "rgb_composite.png").is_file()
+    assert (data_root / "M83" / "figures" / "rgb_composite_enhanced.png").is_file()
