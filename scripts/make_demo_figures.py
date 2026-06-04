@@ -16,7 +16,7 @@ if str(SRC_DIR) not in sys.path:
 
 import matplotlib.pyplot as plt
 
-from astro_image_lab import visualization
+from astro_image_lab import enhancement, visualization
 from astro_image_lab.io import discover_fits_files, load_fits
 
 
@@ -94,6 +94,12 @@ def make_demo_figures(
     object_name: str,
     data_root: Path | str = Path("data"),
     filters: list[str] | None = None,
+    enhance_rgb: bool = False,
+    stretch: float = 5.0,
+    gamma: float = 1.0,
+    background_percentile: float = 10,
+    lower: float = 1,
+    upper: float = 99.5,
 ) -> list[Path]:
     """Create PNG demo figures from stacked FITS files for one object.
 
@@ -107,6 +113,10 @@ def make_demo_figures(
     filters : list[str] or None, optional
         Optional list of filters to render. If omitted, filters are discovered
         from supported FITS files whose stems start with ``stacked_``.
+    enhance_rgb : bool, optional
+        When true, also write an enhanced display-only RGB PNG.
+    stretch, gamma, background_percentile, lower, upper : float, optional
+        Enhancement controls used only for ``rgb_composite_enhanced.png``.
 
     Returns
     -------
@@ -162,6 +172,22 @@ def make_demo_figures(
         written_paths.append(rgb_path)
         print(rgb_path)
 
+        if enhance_rgb:
+            enhanced_rgb = enhancement.make_enhanced_rgb(
+                rgb_channel_data["red"],
+                rgb_channel_data["green"],
+                rgb_channel_data["blue"],
+                lower=lower,
+                upper=upper,
+                background_percentile=background_percentile,
+                stretch=stretch,
+                gamma=gamma,
+            )
+            enhanced_rgb_path = figures_dir / "rgb_composite_enhanced.png"
+            plt.imsave(enhanced_rgb_path, enhanced_rgb, origin="lower")
+            written_paths.append(enhanced_rgb_path)
+            print(enhanced_rgb_path)
+
     return written_paths
 
 
@@ -187,6 +213,41 @@ def _build_parser() -> argparse.ArgumentParser:
         nargs="+",
         help="Optional filter names to render, for example blue green red.",
     )
+    parser.add_argument(
+        "--enhance-rgb",
+        action="store_true",
+        help="Also write display-enhanced rgb_composite_enhanced.png when RGB channels exist.",
+    )
+    parser.add_argument(
+        "--stretch",
+        type=float,
+        default=5.0,
+        help="Asinh stretch strength for enhanced RGB output (default: 5.0).",
+    )
+    parser.add_argument(
+        "--gamma",
+        type=float,
+        default=1.0,
+        help="Gamma for enhanced RGB output (default: 1.0).",
+    )
+    parser.add_argument(
+        "--background-percentile",
+        type=float,
+        default=10,
+        help="Finite-pixel percentile subtracted as background per RGB channel (default: 10).",
+    )
+    parser.add_argument(
+        "--lower",
+        type=float,
+        default=1,
+        help="Lower finite-pixel percentile for enhanced RGB normalization (default: 1).",
+    )
+    parser.add_argument(
+        "--upper",
+        type=float,
+        default=99.5,
+        help="Upper finite-pixel percentile for enhanced RGB normalization (default: 99.5).",
+    )
     return parser
 
 
@@ -199,6 +260,12 @@ def main(argv: list[str] | None = None) -> int:
             object_name=args.object_name,
             data_root=args.data_root,
             filters=args.filters,
+            enhance_rgb=args.enhance_rgb,
+            stretch=args.stretch,
+            gamma=args.gamma,
+            background_percentile=args.background_percentile,
+            lower=args.lower,
+            upper=args.upper,
         )
     except DemoFigureError as exc:
         parser.error(str(exc))

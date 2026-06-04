@@ -17,7 +17,7 @@ The scientific goal of V1 is to provide a transparent teaching and portfolio pip
 - **Calibration helpers** for master-bias creation, normalized master-flat creation, and science-frame calibration.
 - **Stacking and alignment helpers** for median normalization, optional `astroalign` registration, sigma clipping, and mean stacking.
 - **YAML-driven CLI pipeline** that validates inputs and writes master calibration products plus stacked science images.
-- **Visualization helpers** for percentile scaling, single-image plots, histograms, before/after comparisons, and RGB composites.
+- **Visualization and enhancement helpers** for percentile scaling, single-image plots, histograms, before/after comparisons, simple RGB composites, and display-only RGB enhancement with background subtraction, color balancing, asinh stretch, and gamma correction.
 - **Photometry and galaxy-analysis helpers** for circular aperture fluxes, growth curves, effective radius estimates, distance modulus, absolute magnitude conversion, and pixel-to-kpc conversion.
 - **Tests** covering calibration math, stacking behavior, visualization utilities, photometry utilities, and CLI config validation.
 
@@ -38,6 +38,7 @@ The scientific goal of V1 is to provide a transparent teaching and portfolio pip
 │   └── make_demo_figures.py
 ├── src/astro_image_lab/     # Reusable package modules
 │   ├── calibration.py
+│   ├── enhancement.py
 │   ├── io.py
 │   ├── photometry.py
 │   ├── stacking.py
@@ -131,6 +132,17 @@ By default, the demo-figure script discovers supported FITS files in `data/M83/s
 
 When `stacked_red`, `stacked_green`, and `stacked_blue` files with supported FITS extensions are all available in the selected inputs, it also writes `rgb_composite.png` using the package RGB visualization helper. Use `--data-root` for a different object-layout root, or `--filters blue green red` to render a specific filter subset without rerunning calibration.
 
+For display-quality RGB previews, add `--enhance-rgb` to keep the backward-compatible simple composite and also write:
+
+- `rgb_composite_enhanced.png` to `data/<OBJECT_NAME>/figures/`
+
+The enhanced PNG is visualization-only: it loads the stacked/aligned RGB channels, subtracts a finite-pixel background estimate per channel, percentile-normalizes, optionally balances channel levels, applies an asinh stretch to bring out faint spiral structure, and applies gamma correction. It does not write or modify calibrated FITS data. Useful controls are:
+
+```bash
+python scripts/make_demo_figures.py --object M83 --enhance-rgb \
+  --background-percentile 10 --lower 1 --upper 99.5 --stretch 5.0 --gamma 1.0
+```
+
 
 Alignment remains enabled by default and can still be controlled with the legacy top-level `align: true` or `align: false` flag. New configs can use an `alignment` block for diagnostics and tuning; when `alignment.enabled` is present, it overrides the legacy `align` value. The default settings preserve the previous behavior:
 
@@ -170,11 +182,11 @@ Run the full test suite from the repository root:
 pytest -q
 ```
 
-## Current V2.4 status
+## Current V2.5 status
 
-V2.4 is a working, modular baseline for object-based astronomy-image reduction experiments:
+V2.5 is a working, modular baseline for object-based astronomy-image reduction experiments:
 
-- FITS I/O, calibration, stacking/alignment, visualization, photometry, and galaxy-analysis helpers are implemented under `src/astro_image_lab/`.
+- FITS I/O, calibration, stacking/alignment, visualization, display-only enhancement, photometry, and galaxy-analysis helpers are implemented under `src/astro_image_lab/`.
 - The command-line calibration pipeline is driven by YAML configuration, performs input validation before reading FITS data, writes alignment diagnostics for each science frame, and can optionally align final stacked channels for RGB composition.
 - The test suite covers the core numerical behavior and CLI validation paths.
 - The example M83 configuration documents the object-based `data/M83/` layout, but the raw FITS data are not committed to the repository.
