@@ -4,7 +4,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
+
 from .io import load_fits, save_fits
+
+
+def ensure_native_float_array(data):
+    """Return image data as a native-endian floating-point NumPy array.
+
+    FITS readers can return big-endian arrays because FITS stores data in
+    big-endian byte order. ``astroalign`` and its dependencies expect native
+    byte order on little-endian systems, so channel alignment normalizes arrays
+    before registration while preserving floating-point values, including NaNs.
+    """
+    return np.asarray(data, dtype=np.float64)
 
 
 def choose_reference_filter(filters, reference_filter=None):
@@ -96,6 +109,7 @@ def align_stacked_channels(
 
     reference_path = stacked_paths[resolved_reference_filter]
     reference_data, reference_header = load_fits(reference_path)
+    reference_registration_data = ensure_native_float_array(reference_data)
     records = []
 
     for filter_name in sorted(stacked_paths):
@@ -118,9 +132,10 @@ def align_stacked_channels(
             continue
 
         channel_data, channel_header = load_fits(input_path)
+        channel_registration_data = ensure_native_float_array(channel_data)
         try:
             aligned_data, _footprint = astroalign.register(
-                channel_data, reference_data, min_area=min_area
+                channel_registration_data, reference_registration_data, min_area=min_area
             )
         except Exception as exc:
             records.append(
