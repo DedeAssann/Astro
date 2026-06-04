@@ -247,3 +247,210 @@ def test_cli_enhance_rgb_writes_enhanced_composite(tmp_path, monkeypatch):
     assert exit_code == 0
     assert (data_root / "M83" / "figures" / "rgb_composite.png").is_file()
     assert (data_root / "M83" / "figures" / "rgb_composite_enhanced.png").is_file()
+
+
+def test_ds9like_output_is_written_when_requested(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("blue", "green", "red"))
+    _mock_load_fits(monkeypatch)
+
+    written = make_demo_figures.make_demo_figures("M83", data_root=data_root, ds9like=True)
+
+    ds9_path = data_root / "M83" / "figures" / "rgb_composite_ds9like.png"
+    assert ds9_path in written
+    assert ds9_path.is_file()
+
+
+def test_galaxy_detail_grid_is_written_when_requested(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("blue", "green", "red"))
+    _mock_load_fits(monkeypatch)
+
+    written = make_demo_figures.make_demo_figures(
+        "M83",
+        data_root=data_root,
+        crop_center=[2, 2],
+        crop_size=3,
+        galaxy_detail_grid=True,
+    )
+
+    grid_path = data_root / "M83" / "figures" / "galaxy_detail_grid.png"
+    assert grid_path in written
+    assert grid_path.is_file()
+
+
+def test_cli_accepts_rgb_background_and_color_balance_options(tmp_path, monkeypatch, capsys):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("blue", "green", "red"))
+    _mock_load_fits(monkeypatch)
+
+    exit_code = make_demo_figures.main(
+        [
+            "--object",
+            "M83",
+            "--data-root",
+            str(data_root),
+            "--ds9like",
+            "--background-neutralization",
+            "equalize",
+            "--background-percentile",
+            "10",
+            "--color-balance",
+            "background",
+            "--color-balance-strength",
+            "0.5",
+            "--channel-scales",
+            "1.0",
+            "0.9",
+            "1.1",
+            "--balance-region",
+            "full",
+        ]
+    )
+
+    assert exit_code == 0
+    assert (data_root / "M83" / "figures" / "rgb_composite_ds9like.png").is_file()
+    stdout = capsys.readouterr().out
+    assert "ds9like background estimates" in stdout
+    assert "ds9like color balance factors" in stdout
+    assert "ds9like effective balance factors" in stdout
+    assert "ds9like manual channel scales" in stdout
+
+
+def test_crop_center_origin_one_shifts_center_by_one_pixel():
+    assert make_demo_figures._interpret_crop_center([7, 3], crop_center_origin=0) == [7.0, 3.0]
+    assert make_demo_figures._interpret_crop_center([7, 3], crop_center_origin=1) == [6.0, 2.0]
+
+
+def test_visualization_presets_map_to_expected_parameters():
+    assert make_demo_figures._resolve_display_options("diagnostic") == {
+        "limits": "zscale",
+        "scale": "linear",
+        "background_neutralization": "none",
+        "color_balance": "none",
+        "color_balance_strength": 1.0,
+        "channel_scales": (1.0, 1.0, 1.0),
+        "balance_region": "full",
+        "smooth_sigma": None,
+        "unsharp_sigma": None,
+        "unsharp_amount": None,
+    }
+    assert make_demo_figures._resolve_display_options("natural")["scale"] == "squared"
+    deep_sky = make_demo_figures._resolve_display_options("deep_sky")
+    assert deep_sky["scale"] == "cubed"
+    assert deep_sky["background_neutralization"] == "equalize"
+    assert deep_sky["color_balance"] == "background"
+    galaxy_detail = make_demo_figures._resolve_display_options("galaxy_detail")
+    assert galaxy_detail["balance_region"] == "full"
+    assert galaxy_detail["color_balance_strength"] == pytest.approx(0.4)
+    assert galaxy_detail["channel_scales"] == (1.0, 0.9, 1.0)
+    assert galaxy_detail["unsharp_sigma"] == pytest.approx(2.0)
+    assert galaxy_detail["unsharp_amount"] == pytest.approx(0.6)
+
+
+def test_explicit_cli_values_override_preset_values():
+    options = make_demo_figures._resolve_display_options(
+        "deep_sky",
+        rgb_scale="squared",
+        background_neutralization="none",
+        color_balance="median",
+        color_balance_strength=0.5,
+        channel_scales=[1.0, 0.8, 1.1],
+        balance_region="crop",
+    )
+
+    assert options["limits"] == "zscale"
+    assert options["scale"] == "squared"
+    assert options["background_neutralization"] == "none"
+    assert options["color_balance"] == "median"
+    assert options["color_balance_strength"] == pytest.approx(0.5)
+    assert options["channel_scales"] == (1.0, 0.8, 1.1)
+    assert options["balance_region"] == "crop"
+
+
+def test_deep_sky_preset_output_is_written(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("blue", "green", "red"))
+    _mock_load_fits(monkeypatch)
+
+    written = make_demo_figures.make_demo_figures("M83", data_root=data_root, preset="deep_sky")
+
+    deep_sky_path = data_root / "M83" / "figures" / "rgb_composite_deep_sky.png"
+    assert deep_sky_path in written
+    assert deep_sky_path.is_file()
+
+
+def test_galaxy_detail_preset_crop_output_is_written(tmp_path, monkeypatch, capsys):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("blue", "green", "red"))
+    _mock_load_fits(monkeypatch)
+
+    written = make_demo_figures.make_demo_figures(
+        "M83",
+        data_root=data_root,
+        preset="galaxy_detail",
+        crop_center=[3, 2],
+        crop_size=2,
+        crop_center_origin=1,
+    )
+
+    crop_path = data_root / "M83" / "figures" / "rgb_crop_galaxy_detail.png"
+    assert crop_path in written
+    assert crop_path.is_file()
+    stdout = capsys.readouterr().out
+    assert "requested X,Y=(3, 2)" in stdout
+    assert "interpreted NumPy row,col=(1.0, 2.0)" in stdout
+
+
+def test_make_demo_figures_forwards_histogram_cli_options(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("red",))
+    _mock_load_fits(monkeypatch)
+    calls = []
+
+    def fake_plot_histogram(
+        image,
+        title=None,
+        output_path=None,
+        bins=100,
+        lower_percentile=0.5,
+        upper_percentile=99.5,
+    ):
+        calls.append(
+            {
+                "bins": bins,
+                "lower_percentile": lower_percentile,
+                "upper_percentile": upper_percentile,
+                "output_path": Path(output_path),
+            }
+        )
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_bytes(b"png")
+        return make_demo_figures.plt.figure()
+
+    monkeypatch.setattr(make_demo_figures.visualization, "plot_histogram", fake_plot_histogram)
+
+    exit_code = make_demo_figures.main(
+        [
+            "--object",
+            "M83",
+            "--data-root",
+            str(data_root),
+            "--hist-lower-percentile",
+            "2.5",
+            "--hist-upper-percentile",
+            "97.5",
+            "--hist-bins",
+            "42",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        {
+            "bins": 42,
+            "lower_percentile": 2.5,
+            "upper_percentile": 97.5,
+            "output_path": data_root / "M83" / "figures" / "histogram_red.png",
+        }
+    ]

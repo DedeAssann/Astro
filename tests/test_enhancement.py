@@ -126,3 +126,234 @@ def test_make_enhanced_rgb_validates_balance_mode():
             np.ones((2, 2)),
             balance="bad",
         )
+
+
+def test_zscale_limits_returns_finite_ordered_limits_with_nonfinite_pixels():
+    image = np.arange(100, dtype=float).reshape(10, 10)
+    image[0, 0] = np.nan
+    image[1, 1] = np.inf
+
+    vmin, vmax = enhancement.zscale_limits(image, random_seed=123)
+
+    assert np.isfinite(vmin)
+    assert np.isfinite(vmax)
+    assert vmin < vmax
+
+
+def test_scale_to_limits_maps_to_unit_interval_and_zeroes_nonfinite_pixels():
+    image = np.array([-1.0, 0.0, 5.0, 10.0, 12.0, np.nan, np.inf])
+
+    scaled = enhancement.scale_to_limits(image, 0.0, 10.0)
+
+    expected = np.array([0.0, 0.0, 0.5, 1.0, 1.0, 0.0, 0.0])
+    np.testing.assert_allclose(scaled, expected)
+
+
+def test_apply_display_scale_named_power_scales():
+    assert enhancement.apply_display_scale(np.array([0.5]), scale="squared")[0] == pytest.approx(
+        0.25
+    )
+    assert enhancement.apply_display_scale(np.array([0.5]), scale="cubed")[0] == pytest.approx(
+        0.125
+    )
+    assert enhancement.apply_display_scale(np.array([0.25]), scale="sqrt")[0] == pytest.approx(
+        0.5
+    )
+
+
+def test_crop_image_supports_2d_and_rgb_and_clips_edges():
+    image = np.arange(25).reshape(5, 5)
+    rgb = np.dstack([image, image + 100, image + 200])
+
+    crop_2d = enhancement.crop_image(image, center=[0, 0], size=4)
+    crop_rgb = enhancement.crop_image(rgb, center=[2, 2], size=3)
+
+    assert crop_2d.shape == (2, 2)
+    np.testing.assert_array_equal(crop_2d, image[:2, :2])
+    assert crop_rgb.shape == (3, 3, 3)
+    np.testing.assert_array_equal(crop_rgb[..., 0], image[1:4, 1:4])
+
+
+
+def test_crop_image_uses_xy_center_as_col_row():
+    image = np.arange(100).reshape(10, 10)
+
+    crop = enhancement.crop_image(image, center=[7, 3], size=3)
+
+    assert crop.shape == (3, 3)
+    assert crop[1, 1] == image[3, 7]
+    np.testing.assert_array_equal(crop, image[2:5, 6:9])
+
+
+def test_make_display_rgb_returns_rgb_shape_and_range():
+    red = np.arange(16, dtype=float).reshape(4, 4)
+    green = red + 1
+    blue = red + 2
+
+    rgb = enhancement.make_display_rgb(
+        red, green, blue, limits="percentile", scale="squared", lower=0, upper=100
+    )
+
+    assert rgb.shape == (4, 4, 3)
+    assert np.all(np.isfinite(rgb))
+    assert np.all((0 <= rgb) & (rgb <= 1))
+
+
+def test_unsharp_mask_changes_synthetic_image_and_preserves_shape_and_range():
+    image = np.zeros((7, 7), dtype=float)
+    image[3, 3] = 1.0
+
+    sharpened = enhancement.unsharp_mask(image, sigma=1.0, amount=0.8)
+
+    assert sharpened.shape == image.shape
+    assert np.all((0 <= sharpened) & (sharpened <= 1))
+    assert not np.allclose(sharpened, image * 0)
+
+
+def test_neutralize_rgb_background_makes_tinted_background_more_neutral():
+    rgb = np.zeros((6, 6, 3), dtype=float)
+    rgb[..., 0] = 0.10
+    rgb[..., 1] = 0.20
+    rgb[..., 2] = 0.40
+    rgb[3, 3] = [0.8, 0.7, 0.6]
+
+    neutralized = enhancement.neutralize_rgb_background(rgb, percentile=10, mode="equalize")
+    backgrounds = [
+        enhancement.estimate_channel_background(neutralized[..., channel], percentile=10)
+        for channel in range(3)
+    ]
+
+    assert max(backgrounds) - min(backgrounds) < 1e-12
+    assert np.all((0 <= neutralized) & (neutralized <= 1))
+
+
+def test_balance_rgb_channels_avoids_division_by_zero():
+    rgb = np.zeros((4, 4, 3), dtype=float)
+    rgb[..., 0] = 0.0
+    rgb[..., 1] = 0.2
+    rgb[..., 2] = 0.4
+
+    balanced = enhancement.balance_rgb_channels(rgb, method="background", percentile=10)
+
+    assert balanced.shape == rgb.shape
+    assert np.all(np.isfinite(balanced))
+    assert np.all((0 <= balanced) & (balanced <= 1))
+
+
+def test_make_display_rgb_with_color_balance_options_returns_valid_image():
+    base = np.arange(25, dtype=float).reshape(5, 5)
+
+    rgb = enhancement.make_display_rgb(
+        base,
+        base * 1.5,
+        base * 2.0,
+        limits="percentile",
+        lower=0,
+        upper=100,
+        background_neutralization="equalize",
+        background_percentile=10,
+        color_balance="max",
+    )
+
+    assert rgb.shape == (5, 5, 3)
+    assert np.all(np.isfinite(rgb))
+    assert np.all((0 <= rgb) & (rgb <= 1))
+
+
+def test_full_and_crop_balance_regions_use_different_channel_factors():
+    rgb = np.full((8, 8, 3), 0.1, dtype=float)
+    rgb[2:6, 2:6, 1] = 0.8
+    crop = enhancement.crop_image(rgb, center=[3.5, 3.5], size=4)
+
+    _full_backgrounds, full_factors = enhancement.rgb_color_adjustment_factors(
+        rgb,
+        percentile=10,
+        background_neutralization="none",
+        color_balance="background",
+    )
+    _crop_backgrounds, crop_factors = enhancement.rgb_color_adjustment_factors(
+        crop,
+        percentile=10,
+        background_neutralization="none",
+        color_balance="background",
+    )
+
+    assert not np.allclose(full_factors, crop_factors)
+    np.testing.assert_allclose(full_factors, np.ones(3))
+    assert crop_factors[1] < full_factors[1]
+
+
+def test_make_processed_rgb_balance_region_full_differs_from_crop_region():
+    red = np.full((8, 8), 0.1, dtype=float)
+    green = np.full((8, 8), 0.1, dtype=float)
+    blue = np.full((8, 8), 0.1, dtype=float)
+    green[2:6, 2:6] = 0.8
+
+    full_balanced = enhancement.make_processed_rgb(
+        red,
+        green,
+        blue,
+        limits="percentile",
+        lower=0,
+        upper=100,
+        scale="linear",
+        crop_center=[3.5, 3.5],
+        crop_size=4,
+        background_neutralization="none",
+        color_balance="background",
+        balance_region="full",
+    )
+    crop_balanced = enhancement.make_processed_rgb(
+        red,
+        green,
+        blue,
+        limits="percentile",
+        lower=0,
+        upper=100,
+        scale="linear",
+        crop_center=[3.5, 3.5],
+        crop_size=4,
+        background_neutralization="none",
+        color_balance="background",
+        balance_region="crop",
+    )
+
+    assert not np.allclose(full_balanced, crop_balanced)
+
+
+def test_color_balance_strength_blends_factors_toward_one():
+    factors = np.array([0.5, 1.0, 2.0])
+
+    np.testing.assert_allclose(
+        enhancement.effective_rgb_channel_balance_factors(factors, color_balance_strength=0.0),
+        np.ones(3),
+    )
+    np.testing.assert_allclose(
+        enhancement.effective_rgb_channel_balance_factors(factors, color_balance_strength=1.0),
+        factors,
+    )
+    np.testing.assert_allclose(
+        enhancement.effective_rgb_channel_balance_factors(factors, color_balance_strength=0.5),
+        np.array([0.75, 1.0, 1.5]),
+    )
+
+
+def test_channel_scales_modify_rgb_after_automatic_balance():
+    rgb = np.ones((2, 2, 3), dtype=float) * 0.5
+
+    scaled = enhancement.balance_rgb_channels(
+        rgb,
+        method="none",
+        channel_scales=(1.0, 0.5, 1.5),
+    )
+
+    np.testing.assert_allclose(scaled[..., 0], 0.5)
+    np.testing.assert_allclose(scaled[..., 1], 0.25)
+    np.testing.assert_allclose(scaled[..., 2], 0.75)
+
+
+def test_color_balance_strength_and_channel_scales_validate_ranges():
+    with pytest.raises(ValueError, match="color_balance_strength"):
+        enhancement.effective_rgb_channel_balance_factors(np.ones(3), color_balance_strength=-0.1)
+    with pytest.raises(ValueError, match="channel_scales"):
+        enhancement.balance_rgb_channels(np.ones((2, 2, 3)), method="none", channel_scales=(1, 0, 1))

@@ -19,7 +19,7 @@ The scientific goal of V1 is to provide a transparent teaching and portfolio pip
 - **YAML-driven CLI pipeline** that validates inputs and writes master calibration products plus stacked science images.
 - **Calibration QC diagnostics** for per-frame bias statistics, bias ADU-regime warnings, flat exposure-time linearity curves, saturation checks, and CSV/PNG reports before master-flat stacking.
 - **Diagnostics helpers** for calibration and stacking pixel-distribution histograms, robust finite-pixel statistics, reproducible frame sampling, and CSV diagnostics reports.
-- **Visualization and enhancement helpers** for percentile scaling, single-image plots, histograms, before/after comparisons, simple RGB composites, and display-only RGB enhancement with background subtraction, color balancing, asinh stretch, and gamma correction.
+- **Visualization and enhancement helpers** for percentile scaling, single-image plots, histograms, before/after comparisons, simple RGB composites, display-only RGB enhancement, DS9-like zscale limits, RGB background neutralization/color balancing, linear/squared/cubed/sqrt/log/asinh/gamma display scales, Gaussian smoothing, unsharp masking, and galaxy-centered crop products.
 - **Photometry and galaxy-analysis helpers** for circular aperture fluxes, growth curves, effective radius estimates, distance modulus, absolute magnitude conversion, and pixel-to-kpc conversion.
 - **Tests** covering calibration math, stacking behavior, visualization utilities, photometry utilities, and CLI config validation.
 
@@ -194,6 +194,8 @@ By default, the demo-figure script discovers supported FITS files in `data/M83/s
 - `stacked_<filter>.png` to `data/<OBJECT_NAME>/figures/`
 - `histogram_<filter>.png` to `data/<OBJECT_NAME>/figures/`
 
+Demo histograms ignore NaN/Inf pixels and automatically frame the useful finite-pixel distribution with robust percentile x-axis bounds (`--hist-lower-percentile`, `--hist-upper-percentile`, and `--hist-bins`; defaults `0.5`, `99.5`, and `100`) so saturated stars, cosmic rays, and extreme outliers do not dominate the axes.
+
 When `stacked_red`, `stacked_green`, and `stacked_blue` files with supported FITS extensions are all available in the selected inputs, it also writes `rgb_composite.png` using the package RGB visualization helper. Use `--data-root` for a different object-layout root, or `--filters blue green red` to render a specific filter subset without rerunning calibration.
 
 For display-quality RGB previews, add `--enhance-rgb` to keep the backward-compatible simple composite and also write:
@@ -204,8 +206,29 @@ The enhanced PNG is visualization-only: it loads the stacked/aligned RGB channel
 
 ```bash
 python scripts/make_demo_figures.py --object M83 --enhance-rgb \
-  --background-percentile 10 --lower 1 --upper 99.5 --stretch 5.0 --gamma 1.0
+  --background-percentile 10 --lower 0.5 --upper 99.5 --stretch 5.0 --gamma 1.0
 ```
+
+For the current recommended full-frame M83 preview, use the `deep_sky` preset. It keeps the baseline `rgb_composite.png` and adds `rgb_composite_deep_sky.png` using zscale limits, a cubed display scale, background equalization, and background-based color balance:
+
+```bash
+python scripts/make_demo_figures.py --object M83 --preset deep_sky
+```
+
+Other named presets are available for repeatable workflows: `diagnostic` writes a zscale+linear unbalanced view, `natural` writes zscale+squared with neutralized background/color balance, and `galaxy_detail` writes a sharpened crop-oriented view with gentler partial color balance (`color_balance_strength=0.4`) and a slight green-channel reduction (`channel_scales=1.0 0.9 1.0`). For galaxy detail, provide the crop center as DS9-style `X Y` image coordinates (x=column, y=row); by default these are Python zero-based coordinates. Use `--crop-center-origin 1` for one-based DS9 readouts. The CLI prints the requested X,Y center, interpreted NumPy row,col center, and clipped crop bounds. Recommended command:
+
+```bash
+python scripts/make_demo_figures.py --object M83 --preset galaxy_detail \
+  --crop-center X Y --crop-size 450
+```
+
+Advanced overrides remain available for experimentation. Presets set defaults, and explicit options such as `--rgb-scale`, `--rgb-limits`, `--background-neutralization`, `--color-balance`, `--color-balance-strength`, `--channel-scales R G B`, `--balance-region full|crop`, `--smooth-sigma`, `--unsharp-sigma`, or `--unsharp-amount` override the preset values. For example, this keeps the `deep_sky` background/color defaults but uses a squared scale:
+
+```bash
+python scripts/make_demo_figures.py --object M83 --preset deep_sky --rgb-scale squared
+```
+
+The older `--ds9like`, manual named-scale outputs, crop outputs, and `--galaxy-detail-grid` comparison output are still available as advanced visualization-only tools. Automatic RGB balance factors can be applied partially with `--color-balance-strength` (`0` means no automatic factor, `1` means full factor), then manual positive RGB multipliers from `--channel-scales R G B` are applied. Crop outputs never modify FITS data; crops are applied to raw stacked/aligned RGB channels before display transforms, smoothing, or unsharp masking. By default, cropped outputs estimate zscale limits and background/color balance from the full aligned RGB frame (`--balance-region full`) to avoid galaxy-dominated crops over-correcting the color; use `--balance-region crop` only when you intentionally want crop-local balance estimates.
 
 
 Alignment remains enabled by default and can still be controlled with the legacy top-level `align: true` or `align: false` flag. New configs can use an `alignment` block for diagnostics and tuning; when `alignment.enabled` is present, it overrides the legacy `align` value. The default settings preserve the previous behavior:
