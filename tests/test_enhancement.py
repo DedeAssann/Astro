@@ -126,3 +126,74 @@ def test_make_enhanced_rgb_validates_balance_mode():
             np.ones((2, 2)),
             balance="bad",
         )
+
+
+def test_zscale_limits_returns_finite_ordered_limits_with_nonfinite_pixels():
+    image = np.arange(100, dtype=float).reshape(10, 10)
+    image[0, 0] = np.nan
+    image[1, 1] = np.inf
+
+    vmin, vmax = enhancement.zscale_limits(image, random_seed=123)
+
+    assert np.isfinite(vmin)
+    assert np.isfinite(vmax)
+    assert vmin < vmax
+
+
+def test_scale_to_limits_maps_to_unit_interval_and_zeroes_nonfinite_pixels():
+    image = np.array([-1.0, 0.0, 5.0, 10.0, 12.0, np.nan, np.inf])
+
+    scaled = enhancement.scale_to_limits(image, 0.0, 10.0)
+
+    expected = np.array([0.0, 0.0, 0.5, 1.0, 1.0, 0.0, 0.0])
+    np.testing.assert_allclose(scaled, expected)
+
+
+def test_apply_display_scale_named_power_scales():
+    assert enhancement.apply_display_scale(np.array([0.5]), scale="squared")[0] == pytest.approx(
+        0.25
+    )
+    assert enhancement.apply_display_scale(np.array([0.5]), scale="cubed")[0] == pytest.approx(
+        0.125
+    )
+    assert enhancement.apply_display_scale(np.array([0.25]), scale="sqrt")[0] == pytest.approx(
+        0.5
+    )
+
+
+def test_crop_image_supports_2d_and_rgb_and_clips_edges():
+    image = np.arange(25).reshape(5, 5)
+    rgb = np.dstack([image, image + 100, image + 200])
+
+    crop_2d = enhancement.crop_image(image, center=[0, 0], size=4)
+    crop_rgb = enhancement.crop_image(rgb, center=[2, 2], size=3)
+
+    assert crop_2d.shape == (2, 2)
+    np.testing.assert_array_equal(crop_2d, image[:2, :2])
+    assert crop_rgb.shape == (4, 4, 3)
+    np.testing.assert_array_equal(crop_rgb[..., 0], image[0:4, 0:4])
+
+
+def test_make_display_rgb_returns_rgb_shape_and_range():
+    red = np.arange(16, dtype=float).reshape(4, 4)
+    green = red + 1
+    blue = red + 2
+
+    rgb = enhancement.make_display_rgb(
+        red, green, blue, limits="percentile", scale="squared", lower=0, upper=100
+    )
+
+    assert rgb.shape == (4, 4, 3)
+    assert np.all(np.isfinite(rgb))
+    assert np.all((0 <= rgb) & (rgb <= 1))
+
+
+def test_unsharp_mask_changes_synthetic_image_and_preserves_shape_and_range():
+    image = np.zeros((7, 7), dtype=float)
+    image[3, 3] = 1.0
+
+    sharpened = enhancement.unsharp_mask(image, sigma=1.0, amount=0.8)
+
+    assert sharpened.shape == image.shape
+    assert np.all((0 <= sharpened) & (sharpened <= 1))
+    assert not np.allclose(sharpened, image * 0)

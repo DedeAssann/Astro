@@ -19,7 +19,7 @@ The scientific goal of V1 is to provide a transparent teaching and portfolio pip
 - **YAML-driven CLI pipeline** that validates inputs and writes master calibration products plus stacked science images.
 - **Calibration QC diagnostics** for per-frame bias statistics, bias ADU-regime warnings, flat exposure-time linearity curves, saturation checks, and CSV/PNG reports before master-flat stacking.
 - **Diagnostics helpers** for calibration and stacking pixel-distribution histograms, robust finite-pixel statistics, reproducible frame sampling, and CSV diagnostics reports.
-- **Visualization and enhancement helpers** for percentile scaling, single-image plots, histograms, before/after comparisons, simple RGB composites, and display-only RGB enhancement with background subtraction, color balancing, asinh stretch, and gamma correction.
+- **Visualization and enhancement helpers** for percentile scaling, single-image plots, histograms, before/after comparisons, simple RGB composites, display-only RGB enhancement, DS9-like zscale limits, linear/squared/cubed/sqrt/log/asinh/gamma display scales, Gaussian smoothing, unsharp masking, and galaxy-centered crop products.
 - **Photometry and galaxy-analysis helpers** for circular aperture fluxes, growth curves, effective radius estimates, distance modulus, absolute magnitude conversion, and pixel-to-kpc conversion.
 - **Tests** covering calibration math, stacking behavior, visualization utilities, photometry utilities, and CLI config validation.
 
@@ -204,8 +204,33 @@ The enhanced PNG is visualization-only: it loads the stacked/aligned RGB channel
 
 ```bash
 python scripts/make_demo_figures.py --object M83 --enhance-rgb \
-  --background-percentile 10 --lower 1 --upper 99.5 --stretch 5.0 --gamma 1.0
+  --background-percentile 10 --lower 0.5 --upper 99.5 --stretch 5.0 --gamma 1.0
 ```
+
+For DS9-style display previews of M83-like galaxies, use zscale display limits with a squared scale:
+
+```bash
+python scripts/make_demo_figures.py --object M83 --ds9like
+```
+
+This keeps the baseline `rgb_composite.png` and adds `rgb_composite_ds9like.png`. You can also request named display-scale composites with `--rgb-limits zscale|percentile` and `--rgb-scale linear|squared|cubed|sqrt|log|asinh|gamma`; for example:
+
+```bash
+python scripts/make_demo_figures.py --object M83 \
+  --rgb-limits zscale --rgb-scale cubed --zscale-contrast 0.25
+```
+
+Galaxy-detail products crop the raw stacked/aligned red, green, and blue channels before display limits, display scales, Gaussian smoothing, or unsharp masking are applied. The crop center is provided as `X Y` display coordinates (column, row); bounds are clipped safely at image edges. Examples:
+
+```bash
+python scripts/make_demo_figures.py --object M83 --ds9like \
+  --crop-center 1024 1024 --crop-size 900 --unsharp-sigma 2.0 --unsharp-amount 0.6
+
+python scripts/make_demo_figures.py --object M83 --galaxy-detail-grid \
+  --crop-center 1024 1024 --crop-size 900
+```
+
+Crop outputs are named from their processing settings, such as `rgb_crop_zscale_squared.png`, `rgb_crop_zscale_squared_unsharp.png`, or `rgb_crop_zscale_cubed_smooth.png`. The `--galaxy-detail-grid` option writes `galaxy_detail_grid.png` with six panels: zscale+linear, zscale+squared, zscale+cubed, zscale+squared+smoothing, zscale+squared+unsharp, and zscale+asinh+unsharp. If no crop center/size is supplied for the grid, the script prints a warning and uses the full RGB field.
 
 
 Alignment remains enabled by default and can still be controlled with the legacy top-level `align: true` or `align: false` flag. New configs can use an `alignment` block for diagnostics and tuning; when `alignment.enabled` is present, it overrides the legacy `align` value. The default settings preserve the previous behavior:

@@ -247,3 +247,33 @@ def test_cli_enhance_rgb_writes_enhanced_composite(tmp_path, monkeypatch):
     assert exit_code == 0
     assert (data_root / "M83" / "figures" / "rgb_composite.png").is_file()
     assert (data_root / "M83" / "figures" / "rgb_composite_enhanced.png").is_file()
+
+
+def test_ds9like_output_is_written_when_requested(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("blue", "green", "red"))
+    _mock_load_fits(monkeypatch)
+
+    written = make_demo_figures.make_demo_figures("M83", data_root=data_root, ds9like=True)
+
+    ds9_path = data_root / "M83" / "figures" / "rgb_composite_ds9like.png"
+    assert ds9_path in written
+    assert ds9_path.is_file()
+
+
+def test_galaxy_detail_grid_is_written_when_requested(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("blue", "green", "red"))
+    _mock_load_fits(monkeypatch)
+
+    written = make_demo_figures.make_demo_figures(
+        "M83",
+        data_root=data_root,
+        crop_center=[2, 2],
+        crop_size=3,
+        galaxy_detail_grid=True,
+    )
+
+    grid_path = data_root / "M83" / "figures" / "galaxy_detail_grid.png"
+    assert grid_path in written
+    assert grid_path.is_file()
