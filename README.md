@@ -194,6 +194,8 @@ By default, the demo-figure script discovers supported FITS files in `data/M83/s
 - `stacked_<filter>.png` to `data/<OBJECT_NAME>/figures/`
 - `histogram_<filter>.png` to `data/<OBJECT_NAME>/figures/`
 
+Demo histograms ignore NaN/Inf pixels and automatically frame the useful finite-pixel distribution with robust percentile x-axis bounds (`--hist-lower-percentile`, `--hist-upper-percentile`, and `--hist-bins`; defaults `0.5`, `99.5`, and `100`) so saturated stars, cosmic rays, and extreme outliers do not dominate the axes.
+
 When `stacked_red`, `stacked_green`, and `stacked_blue` files with supported FITS extensions are all available in the selected inputs, it also writes `rgb_composite.png` using the package RGB visualization helper. Use `--data-root` for a different object-layout root, or `--filters blue green red` to render a specific filter subset without rerunning calibration.
 
 For display-quality RGB previews, add `--enhance-rgb` to keep the backward-compatible simple composite and also write:

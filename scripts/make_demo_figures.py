@@ -465,6 +465,9 @@ def make_demo_figures(
     background_percentile: float = 10,
     lower: float = 0.5,
     upper: float = 99.5,
+    hist_lower_percentile: float = 0.5,
+    hist_upper_percentile: float = 99.5,
+    hist_bins: int = 100,
     ds9like: bool = False,
     preset: str | None = None,
     rgb_limits: str | None = None,
@@ -538,6 +541,9 @@ def make_demo_figures(
             data,
             title=f"{object_name} {filter_name} pixel histogram",
             output_path=histogram_path,
+            bins=hist_bins,
+            lower_percentile=hist_lower_percentile,
+            upper_percentile=hist_upper_percentile,
         )
         plt.close(fig)
         written_paths.append(histogram_path)
@@ -968,6 +974,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Upper finite-pixel percentile for RGB normalization (default: 99.5).",
     )
     parser.add_argument(
+        "--hist-lower-percentile",
+        type=float,
+        default=0.5,
+        help="Lower finite-pixel percentile for demo histogram x-axis bounds (default: 0.5).",
+    )
+    parser.add_argument(
+        "--hist-upper-percentile",
+        type=float,
+        default=99.5,
+        help="Upper finite-pixel percentile for demo histogram x-axis bounds (default: 99.5).",
+    )
+    parser.add_argument(
+        "--hist-bins",
+        type=int,
+        default=100,
+        help="Number of bins for demo figure histograms (default: 100).",
+    )
+    parser.add_argument(
         "--ds9like",
         action="store_true",
         help="Write legacy rgb_composite_ds9like.png with zscale limits and squared display scale.",
@@ -1054,6 +1078,9 @@ def main(argv: list[str] | None = None) -> int:
             background_percentile=args.background_percentile,
             lower=args.lower,
             upper=args.upper,
+            hist_lower_percentile=args.hist_lower_percentile,
+            hist_upper_percentile=args.hist_upper_percentile,
+            hist_bins=args.hist_bins,
             ds9like=args.ds9like,
             preset=args.preset,
             rgb_limits=args.rgb_limits,

@@ -6,6 +6,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -92,3 +93,65 @@ def test_plotting_functions_save_files(tmp_path):
         plt.close(fig_image)
         plt.close(fig_hist)
         plt.close(fig_compare)
+
+
+def test_compute_histogram_bounds_ignore_extreme_outliers():
+    image = np.concatenate([np.linspace(0, 10, 1000), np.array([-1e6, 1e6])])
+
+    xmin, xmax = visualization.compute_histogram_bounds(
+        image,
+        lower_percentile=1,
+        upper_percentile=99,
+    )
+
+    assert xmin > -100
+    assert xmax < 100
+    assert xmin < xmax
+
+
+def test_compute_histogram_bounds_ignore_nan_and_inf_values():
+    image = np.array([0, 1, 2, np.nan, np.inf, -np.inf], dtype=float)
+
+    xmin, xmax = visualization.compute_histogram_bounds(
+        image,
+        lower_percentile=0,
+        upper_percentile=100,
+    )
+
+    assert xmin == pytest.approx(0)
+    assert xmax == pytest.approx(2)
+
+
+def test_compute_histogram_bounds_constant_and_invalid_arrays_are_safe():
+    constant_bounds = visualization.compute_histogram_bounds(np.full((3, 3), 5.0))
+    invalid_bounds = visualization.compute_histogram_bounds(np.array([np.nan, np.inf]))
+
+    assert constant_bounds[0] < 5 < constant_bounds[1]
+    assert invalid_bounds == (0.0, 1.0)
+
+
+def test_plot_histogram_uses_requested_percentile_bounds(tmp_path):
+    image = np.concatenate([np.arange(100, dtype=float), np.array([1e6, np.nan, np.inf])])
+    output_path = tmp_path / "bounded_histogram.png"
+
+    fig = visualization.plot_histogram(
+        image,
+        output_path=output_path,
+        bins=12,
+        lower_percentile=10,
+        upper_percentile=90,
+    )
+
+    try:
+        ax = fig.axes[0]
+        expected_bounds = visualization.compute_histogram_bounds(
+            image,
+            lower_percentile=10,
+            upper_percentile=90,
+        )
+        assert output_path.exists() and output_path.stat().st_size > 0
+        assert ax.get_xlim() == pytest.approx(expected_bounds)
+        assert ax.get_ylim()[0] == pytest.approx(0)
+        assert ax.get_ylim()[1] > 0
+    finally:
+        plt.close(fig)

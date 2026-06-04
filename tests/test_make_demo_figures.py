@@ -400,3 +400,57 @@ def test_galaxy_detail_preset_crop_output_is_written(tmp_path, monkeypatch, caps
     stdout = capsys.readouterr().out
     assert "requested X,Y=(3, 2)" in stdout
     assert "interpreted NumPy row,col=(1.0, 2.0)" in stdout
+
+
+def test_make_demo_figures_forwards_histogram_cli_options(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("red",))
+    _mock_load_fits(monkeypatch)
+    calls = []
+
+    def fake_plot_histogram(
+        image,
+        title=None,
+        output_path=None,
+        bins=100,
+        lower_percentile=0.5,
+        upper_percentile=99.5,
+    ):
+        calls.append(
+            {
+                "bins": bins,
+                "lower_percentile": lower_percentile,
+                "upper_percentile": upper_percentile,
+                "output_path": Path(output_path),
+            }
+        )
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_bytes(b"png")
+        return make_demo_figures.plt.figure()
+
+    monkeypatch.setattr(make_demo_figures.visualization, "plot_histogram", fake_plot_histogram)
+
+    exit_code = make_demo_figures.main(
+        [
+            "--object",
+            "M83",
+            "--data-root",
+            str(data_root),
+            "--hist-lower-percentile",
+            "2.5",
+            "--hist-upper-percentile",
+            "97.5",
+            "--hist-bins",
+            "42",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        {
+            "bins": 42,
+            "lower_percentile": 2.5,
+            "upper_percentile": 97.5,
+            "output_path": data_root / "M83" / "figures" / "histogram_red.png",
+        }
+    ]
