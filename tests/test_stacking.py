@@ -88,3 +88,125 @@ def test_calibrate_and_stack_align_false_does_not_import_astroalign(monkeypatch)
 
     expected = frames["science.fits"] / np.median(frames["science.fits"])
     np.testing.assert_allclose(stacked, expected.astype(np.float32))
+
+
+def test_calibrate_and_stack_default_returns_only_stacked_image(monkeypatch):
+    frames = {"science.fits": np.array([[1, 2], [3, 4]], dtype=float)}
+    monkeypatch.setattr(stacking, "load_fits", lambda path: (frames[path], {}))
+
+    stacked = stacking.calibrate_and_stack(frames.keys(), np.zeros((2, 2)), np.ones((2, 2)), align=False)
+
+    assert isinstance(stacked, np.ndarray)
+    assert stacked.shape == (2, 2)
+
+
+def test_calibrate_and_stack_returns_alignment_report_records(monkeypatch):
+    frames = {
+        "first.fits": np.array([[1, 2], [3, 4]], dtype=float),
+        "second.fits": np.array([[2, 4], [6, 8]], dtype=float),
+    }
+    calls = []
+
+    class FakeAstroalign:
+        @staticmethod
+        def register(image, reference, **kwargs):
+            calls.append(kwargs)
+            return image, np.zeros_like(image, dtype=bool)
+
+    monkeypatch.setitem(sys.modules, "astroalign", FakeAstroalign)
+    monkeypatch.setattr(stacking, "load_fits", lambda path: (frames[path], {}))
+
+    stacked, report = stacking.calibrate_and_stack(
+        frames.keys(),
+        np.zeros((2, 2)),
+        np.ones((2, 2)),
+        min_area=19,
+        return_alignment_report=True,
+        filter_name="red",
+    )
+
+    assert isinstance(stacked, np.ndarray)
+    assert calls == [{"min_area": 19}]
+    assert report[0]["status"] == "reference"
+    assert report[0]["filter"] == "red"
+    assert report[0]["method"] == "astroalign"
+    assert report[0]["min_area"] == 19
+    assert report[1]["status"] == "aligned"
+    assert report[1]["file_path"] == "second.fits"
+
+
+def test_calibrate_and_stack_align_false_report_records_skipped(monkeypatch):
+    frames = {
+        "first.fits": np.array([[1, 2], [3, 4]], dtype=float),
+        "second.fits": np.array([[2, 4], [6, 8]], dtype=float),
+    }
+    monkeypatch.setitem(sys.modules, "astroalign", None)
+    monkeypatch.setattr(stacking, "load_fits", lambda path: (frames[path], {}))
+
+    _stacked, report = stacking.calibrate_and_stack(
+        frames.keys(),
+        np.zeros((2, 2)),
+        np.ones((2, 2)),
+        align=False,
+        return_alignment_report=True,
+    )
+
+    assert [record["status"] for record in report] == ["skipped", "skipped"]
+    assert [record["method"] for record in report] == ["", ""]
+
+
+def test_calibrate_and_stack_alignment_failure_skip_records_failed_and_continues(monkeypatch):
+    frames = {
+        "first.fits": np.array([[1, 2], [3, 4]], dtype=float),
+        "bad.fits": np.array([[2, 4], [6, 8]], dtype=float),
+        "good.fits": np.array([[3, 6], [9, 12]], dtype=float),
+    }
+    calls = []
+
+    class FakeAstroalign:
+        @staticmethod
+        def register(image, reference, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise RuntimeError("no stars matched")
+            return image, np.zeros_like(image, dtype=bool)
+
+    monkeypatch.setitem(sys.modules, "astroalign", FakeAstroalign)
+    monkeypatch.setattr(stacking, "load_fits", lambda path: (frames[path], {}))
+
+    stacked, report = stacking.calibrate_and_stack(
+        frames.keys(),
+        np.zeros((2, 2)),
+        np.ones((2, 2)),
+        fail_policy="skip",
+        return_alignment_report=True,
+    )
+
+    assert isinstance(stacked, np.ndarray)
+    assert [record["status"] for record in report] == ["reference", "failed", "aligned"]
+    assert "no stars matched" in report[1]["error"]
+    assert calls == [{"min_area": 12}, {"min_area": 12}]
+
+
+def test_calibrate_and_stack_alignment_failure_raise_records_then_raises(monkeypatch):
+    frames = {
+        "first.fits": np.array([[1, 2], [3, 4]], dtype=float),
+        "bad.fits": np.array([[2, 4], [6, 8]], dtype=float),
+    }
+
+    class FakeAstroalign:
+        @staticmethod
+        def register(image, reference, **kwargs):
+            raise RuntimeError("registration exploded")
+
+    monkeypatch.setitem(sys.modules, "astroalign", FakeAstroalign)
+    monkeypatch.setattr(stacking, "load_fits", lambda path: (frames[path], {}))
+
+    with pytest.raises(RuntimeError, match="registration exploded"):
+        stacking.calibrate_and_stack(
+            frames.keys(),
+            np.zeros((2, 2)),
+            np.ones((2, 2)),
+            fail_policy="raise",
+            return_alignment_report=True,
+        )

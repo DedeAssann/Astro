@@ -115,6 +115,8 @@ The CLI accepts `.fits`, `.fit`, and `.fts` filenames case-insensitively, sorts 
 - `master_bias.fits` to `data/<OBJECT_NAME>/calibrated/`
 - `master_flat_<filter>.fits` to `data/<OBJECT_NAME>/calibrated/`
 - `stacked_<filter>.fits` to `data/<OBJECT_NAME>/stacked/`
+- `alignment_report.csv` to `data/<OBJECT_NAME>/analysis/`
+- When channel alignment is enabled, `stacked/aligned_channels/stacked_<filter>_aligned.fits` and `analysis/channel_alignment_report.csv`
 
 Generate PNG demo figures from those stacked FITS products with:
 
@@ -129,6 +131,35 @@ By default, the demo-figure script discovers supported FITS files in `data/M83/s
 
 When `stacked_red`, `stacked_green`, and `stacked_blue` files with supported FITS extensions are all available in the selected inputs, it also writes `rgb_composite.png` using the package RGB visualization helper. Use `--data-root` for a different object-layout root, or `--filters blue green red` to render a specific filter subset without rerunning calibration.
 
+
+Alignment remains enabled by default and can still be controlled with the legacy top-level `align: true` or `align: false` flag. New configs can use an `alignment` block for diagnostics and tuning; when `alignment.enabled` is present, it overrides the legacy `align` value. The default settings preserve the previous behavior:
+
+```yaml
+alignment:
+  enabled: true
+  method: astroalign
+  min_area: 12
+  detection_sigma: null
+  reference: first
+  fail_policy: raise
+```
+
+`min_area` is forwarded to `astroalign.register`. `fail_policy: raise` stops on a registration failure, while `fail_policy: skip` records the failed science frame in the report and stacks the remaining usable frames. The alignment report records one row per science frame with the filter, file path, frame index, status (`reference`, `aligned`, `skipped`, or `failed`), error message, method, and `min_area`.
+
+
+Channel alignment is a second, optional alignment stage that runs after per-filter stacking. Frame alignment registers science frames within one filter; channel alignment registers the final `stacked_red`, `stacked_green`, and `stacked_blue` products to a common reference before RGB composition. It is disabled when the `channel_alignment` section is absent. Enable it with:
+
+```yaml
+channel_alignment:
+  enabled: true
+  reference_filter: green
+  method: astroalign
+  min_area: 12
+  fail_policy: raise
+```
+
+The reference filter defaults to green when green is available, otherwise the first available filter is used. Successful outputs are written under `data/<OBJECT_NAME>/stacked/aligned_channels/` as `stacked_<filter>_aligned.fits`, and `channel_alignment_report.csv` records each channel status (`reference`, `aligned`, or `failed`). `scripts/make_demo_figures.py` still renders per-filter previews from the regular stacked products, but its RGB composite prefers aligned channel files when they exist and falls back to regular `stacked_<filter>.fits` files otherwise; the CLI prints the RGB source paths it used.
+
 Explicit config mode is still supported for custom file selections. Use `configs/m83_explicit_example.yaml` as a template with `bias_files`, `flat_files`, `science_files`, and optional `output_dirs`. For backward compatibility, older configs can omit `output_dirs` and keep using `output_dir`; in that case all generated FITS outputs are written to the single legacy directory.
 
 ## Testing
@@ -139,12 +170,12 @@ Run the full test suite from the repository root:
 pytest -q
 ```
 
-## Current V2.2 status
+## Current V2.4 status
 
-V2.2 is a working, modular baseline for object-based astronomy-image reduction experiments:
+V2.4 is a working, modular baseline for object-based astronomy-image reduction experiments:
 
 - FITS I/O, calibration, stacking/alignment, visualization, photometry, and galaxy-analysis helpers are implemented under `src/astro_image_lab/`.
-- The command-line calibration pipeline is driven by YAML configuration and performs input validation before reading FITS data.
+- The command-line calibration pipeline is driven by YAML configuration, performs input validation before reading FITS data, writes alignment diagnostics for each science frame, and can optionally align final stacked channels for RGB composition.
 - The test suite covers the core numerical behavior and CLI validation paths.
 - The example M83 configuration documents the object-based `data/M83/` layout, but the raw FITS data are not committed to the repository.
 - The pipeline is intentionally lightweight and explicit, favoring readable scientific steps over a large framework.

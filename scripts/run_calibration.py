@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ make_master_flat = None
 load_fits = None
 save_fits = None
 calibrate_and_stack = None
+align_stacked_channels = None
 
 EXPLICIT_INPUT_FIELDS = ("bias_files", "flat_files", "science_files")
 COMPACT_INPUT_FIELDS = ("object_name", "data_root", "filters")
@@ -235,6 +237,119 @@ def _infer_input_files(
     return bias_files, flat_files, science_files
 
 
+def _validate_alignment_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Return normalized alignment options with legacy ``align`` compatibility."""
+    legacy_align = config.get("align", True)
+    if not isinstance(legacy_align, bool):
+        raise ConfigError("Config field 'align' must be true or false")
+
+    alignment = {
+        "enabled": legacy_align,
+        "method": "astroalign",
+        "min_area": 12,
+        "detection_sigma": None,
+        "reference": "first",
+        "fail_policy": "raise",
+    }
+
+    alignment_config = config.get("alignment")
+    if alignment_config is None:
+        return alignment
+    if not isinstance(alignment_config, dict):
+        raise ConfigError("Config field 'alignment' must be a mapping")
+
+    if "enabled" in alignment_config:
+        enabled = alignment_config["enabled"]
+        if not isinstance(enabled, bool):
+            raise ConfigError("Config field 'alignment.enabled' must be true or false")
+        alignment["enabled"] = enabled
+
+    if "method" in alignment_config:
+        method = alignment_config["method"]
+        if method != "astroalign":
+            raise ConfigError("Config field 'alignment.method' must be 'astroalign'")
+        alignment["method"] = method
+
+    if "min_area" in alignment_config:
+        min_area = alignment_config["min_area"]
+        if not isinstance(min_area, int) or min_area <= 0:
+            raise ConfigError("Config field 'alignment.min_area' must be a positive integer")
+        alignment["min_area"] = min_area
+
+    if "detection_sigma" in alignment_config:
+        detection_sigma = alignment_config["detection_sigma"]
+        if detection_sigma is not None and (
+            not isinstance(detection_sigma, (int, float)) or detection_sigma <= 0
+        ):
+            raise ConfigError("Config field 'alignment.detection_sigma' must be a positive number or null")
+        alignment["detection_sigma"] = detection_sigma
+
+    if "reference" in alignment_config:
+        reference = alignment_config["reference"]
+        if reference != "first":
+            raise ConfigError("Config field 'alignment.reference' must be 'first'")
+        alignment["reference"] = reference
+
+    if "fail_policy" in alignment_config:
+        fail_policy = alignment_config["fail_policy"]
+        if fail_policy not in {"raise", "skip"}:
+            raise ConfigError("Config field 'alignment.fail_policy' must be 'raise' or 'skip'")
+        alignment["fail_policy"] = fail_policy
+
+    return alignment
+
+
+def _validate_channel_alignment_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Return normalized final stacked-channel alignment options."""
+    channel_alignment = {
+        "enabled": False,
+        "reference_filter": None,
+        "method": "astroalign",
+        "min_area": 12,
+        "fail_policy": "raise",
+    }
+
+    channel_config = config.get("channel_alignment")
+    if channel_config is None:
+        return channel_alignment
+    if not isinstance(channel_config, dict):
+        raise ConfigError("Config field 'channel_alignment' must be a mapping")
+
+    if "enabled" in channel_config:
+        enabled = channel_config["enabled"]
+        if not isinstance(enabled, bool):
+            raise ConfigError("Config field 'channel_alignment.enabled' must be true or false")
+        channel_alignment["enabled"] = enabled
+
+    if "reference_filter" in channel_config:
+        reference_filter = channel_config["reference_filter"]
+        if reference_filter is not None and (not isinstance(reference_filter, str) or not reference_filter):
+            raise ConfigError(
+                "Config field 'channel_alignment.reference_filter' must be a non-empty string or null"
+            )
+        channel_alignment["reference_filter"] = reference_filter
+
+    if "method" in channel_config:
+        method = channel_config["method"]
+        if method != "astroalign":
+            raise ConfigError("Config field 'channel_alignment.method' must be 'astroalign'")
+        channel_alignment["method"] = method
+
+    if "min_area" in channel_config:
+        min_area = channel_config["min_area"]
+        if not isinstance(min_area, int) or min_area <= 0:
+            raise ConfigError("Config field 'channel_alignment.min_area' must be a positive integer")
+        channel_alignment["min_area"] = min_area
+
+    if "fail_policy" in channel_config:
+        fail_policy = channel_config["fail_policy"]
+        if fail_policy not in {"raise", "skip"}:
+            raise ConfigError("Config field 'channel_alignment.fail_policy' must be 'raise' or 'skip'")
+        channel_alignment["fail_policy"] = fail_policy
+
+    return channel_alignment
+
+
 def _normalize_output_dirs(config: dict[str, Any], object_dir: Path | None) -> dict[str, Path]:
     """Return configured or inferred output directories."""
     output_dirs_value = config.get("output_dirs")
@@ -316,9 +431,8 @@ def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
 
     output_dirs = _normalize_output_dirs(config, object_dir)
 
-    align = config.get("align", True)
-    if not isinstance(align, bool):
-        raise ConfigError("Config field 'align' must be true or false")
+    alignment = _validate_alignment_config(config)
+    channel_alignment = _validate_channel_alignment_config(config)
 
     sigma = config.get("sigma", 2)
     if not isinstance(sigma, (int, float)) or sigma <= 0:
@@ -335,7 +449,9 @@ def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
         "object_name": object_name,
         "object_dir": object_dir,
         "output_dirs": output_dirs,
-        "align": align,
+        "align": alignment["enabled"],
+        "alignment": alignment,
+        "channel_alignment": channel_alignment,
         "sigma": sigma,
         "maxiters": maxiters,
     }
@@ -361,7 +477,7 @@ def _ensure_input_files_exist(paths: list[Path]) -> None:
 def _get_pipeline_functions():
     """Import pipeline helpers lazily after config and file validation."""
     global make_master_bias, make_master_flat, load_fits, save_fits
-    global calibrate_and_stack
+    global calibrate_and_stack, align_stacked_channels
     if make_master_bias is None or make_master_flat is None:
         from astro_image_lab.calibration import make_master_bias as imported_make_master_bias
         from astro_image_lab.calibration import make_master_flat as imported_make_master_flat
@@ -378,20 +494,80 @@ def _get_pipeline_functions():
         from astro_image_lab.stacking import calibrate_and_stack as imported_calibrate_and_stack
 
         calibrate_and_stack = imported_calibrate_and_stack
-    return make_master_bias, make_master_flat, load_fits, save_fits, calibrate_and_stack
+    if align_stacked_channels is None:
+        from astro_image_lab.channel_alignment import (
+            align_stacked_channels as imported_align_stacked_channels,
+        )
+
+        align_stacked_channels = imported_align_stacked_channels
+    return (
+        make_master_bias,
+        make_master_flat,
+        load_fits,
+        save_fits,
+        calibrate_and_stack,
+        align_stacked_channels,
+    )
+
+
+def _write_csv_report(records: list[dict[str, Any]], output_path: Path, fieldnames: list[str]) -> None:
+    """Write report records to CSV."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8", newline="") as report_file:
+        writer = csv.DictWriter(report_file, fieldnames=fieldnames)
+        writer.writeheader()
+        for record in records:
+            writer.writerow({field: record.get(field, "") for field in fieldnames})
+
+
+def _write_alignment_report(records: list[dict[str, Any]], output_path: Path) -> None:
+    """Write collected frame-alignment report records to CSV."""
+    _write_csv_report(
+        records,
+        output_path,
+        ["filter", "file_path", "index", "status", "error", "method", "min_area"],
+    )
+
+
+def _write_channel_alignment_report(records: list[dict[str, Any]], output_path: Path) -> None:
+    """Write collected channel-alignment report records to CSV."""
+    _write_csv_report(
+        records,
+        output_path,
+        [
+            "filter",
+            "input_path",
+            "output_path",
+            "status",
+            "reference_filter",
+            "method",
+            "min_area",
+            "error",
+        ],
+    )
+
 
 def run_pipeline(config_path: Path) -> list[Path]:
     """Run calibration and stacking from ``config_path`` and return written files."""
     raw_config = _load_yaml_config(config_path)
     config = _validate_config(raw_config)
     _ensure_input_files_exist(_input_paths(config))
-    make_bias, make_flat, fits_loader, fits_saver, stack_science = _get_pipeline_functions()
+    (
+        make_bias,
+        make_flat,
+        fits_loader,
+        fits_saver,
+        stack_science,
+        align_channels,
+    ) = _get_pipeline_functions()
 
     output_dirs = config["output_dirs"]
     for output_dir in output_dirs.values():
         output_dir.mkdir(parents=True, exist_ok=True)
 
     written_files: list[Path] = []
+    alignment_report_records: list[dict[str, Any]] = []
+    stacked_paths: dict[str, Path] = {}
 
     master_bias = make_bias(config["bias_files"])
     _bias_data, bias_header = fits_loader(config["bias_files"][0])
@@ -408,19 +584,53 @@ def run_pipeline(config_path: Path) -> list[Path]:
         written_files.append(master_flat_path)
         print(f"Wrote {master_flat_path}")
 
-        stacked_image = stack_science(
+        alignment = config["alignment"]
+        stacked_image, filter_report_records = stack_science(
             config["science_files"][filter_name],
             master_bias,
             master_flat,
-            align=config["align"],
+            align=alignment["enabled"],
+            min_area=alignment["min_area"],
             sigma=config["sigma"],
             maxiters=config["maxiters"],
+            return_alignment_report=True,
+            filter_name=filter_name,
+            fail_policy=alignment["fail_policy"],
+            alignment_method=alignment["method"],
+            detection_sigma=alignment["detection_sigma"],
         )
+        alignment_report_records.extend(filter_report_records)
         _science_data, science_header = fits_loader(config["science_files"][filter_name][0])
         stacked_path = output_dirs["stacked"] / f"stacked_{filter_name}.fits"
         fits_saver(stacked_image, science_header, stacked_path)
         written_files.append(stacked_path)
+        stacked_paths[filter_name] = stacked_path
         print(f"Wrote {stacked_path}")
+
+    channel_alignment = config["channel_alignment"]
+    if channel_alignment["enabled"]:
+        aligned_channel_dir = output_dirs["stacked"] / "aligned_channels"
+        channel_report_records = align_channels(
+            stacked_paths,
+            aligned_channel_dir,
+            reference_filter=channel_alignment["reference_filter"],
+            method=channel_alignment["method"],
+            min_area=channel_alignment["min_area"],
+            fail_policy=channel_alignment["fail_policy"],
+        )
+        for record in channel_report_records:
+            if record["status"] in {"reference", "aligned"}:
+                written_files.append(Path(record["output_path"]))
+                print(f"Wrote {record['output_path']}")
+        channel_report_path = output_dirs["analysis"] / "channel_alignment_report.csv"
+        _write_channel_alignment_report(channel_report_records, channel_report_path)
+        written_files.append(channel_report_path)
+        print(f"Wrote {channel_report_path}")
+
+    alignment_report_path = output_dirs["analysis"] / "alignment_report.csv"
+    _write_alignment_report(alignment_report_records, alignment_report_path)
+    written_files.append(alignment_report_path)
+    print(f"Wrote {alignment_report_path}")
 
     return written_files
 

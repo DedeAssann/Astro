@@ -35,7 +35,7 @@ def _mock_load_fits(monkeypatch):
     def fake_load_fits(path):
         loaded.append(Path(path))
         value_by_filter = {"blue": 1.0, "green": 2.0, "red": 3.0}
-        filter_name = Path(path).stem.removeprefix("stacked_")
+        filter_name = Path(path).stem.removeprefix("stacked_").removesuffix("_aligned")
         return np.full((4, 4), value_by_filter.get(filter_name, 4.0)), {"FILTER": filter_name}
 
     monkeypatch.setattr(make_demo_figures, "load_fits", fake_load_fits)
@@ -92,8 +92,35 @@ def test_discovers_and_processes_stacked_images_with_mixed_fits_extensions(
         data_root / "M83" / "stacked" / "stacked_blue.FITS",
         data_root / "M83" / "stacked" / "stacked_green.fts",
         data_root / "M83" / "stacked" / "stacked_red.fit",
+        data_root / "M83" / "stacked" / "stacked_red.fit",
+        data_root / "M83" / "stacked" / "stacked_green.fts",
+        data_root / "M83" / "stacked" / "stacked_blue.FITS",
     ]
     assert data_root / "M83" / "figures" / "rgb_composite.png" in written
+
+
+def test_rgb_composite_prefers_aligned_channel_files(tmp_path, monkeypatch, capsys):
+    data_root = tmp_path / "data"
+    stacked_dir = _touch_stacked(data_root, filters=("blue", "green", "red"))
+    aligned_dir = stacked_dir / "aligned_channels"
+    aligned_dir.mkdir()
+    for filter_name in ("blue", "green", "red"):
+        (aligned_dir / f"stacked_{filter_name}_aligned.fits").write_text(
+            "aligned placeholder; tests mock FITS loading\n",
+            encoding="utf-8",
+        )
+    loaded = _mock_load_fits(monkeypatch)
+
+    make_demo_figures.make_demo_figures("M83", data_root=data_root)
+
+    assert loaded[-3:] == [
+        aligned_dir / "stacked_red_aligned.fits",
+        aligned_dir / "stacked_green_aligned.fits",
+        aligned_dir / "stacked_blue_aligned.fits",
+    ]
+    stdout = capsys.readouterr().out
+    assert "RGB composite sources:" in stdout
+    assert "stacked_red_aligned.fits" in stdout
 
 
 def test_missing_stacked_directory_gives_clear_error(tmp_path):
