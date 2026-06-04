@@ -328,8 +328,10 @@ def test_visualization_presets_map_to_expected_parameters():
         "scale": "linear",
         "background_neutralization": "none",
         "color_balance": "none",
-        "color_balance_strength": 1.0,
+        "color_balance_strength": 0.0,
         "channel_scales": (1.0, 1.0, 1.0),
+        "convolution": "none",
+        "contrast_region": "full",
         "balance_region": "full",
         "smooth_sigma": None,
         "unsharp_sigma": None,
@@ -341,11 +343,13 @@ def test_visualization_presets_map_to_expected_parameters():
     assert deep_sky["background_neutralization"] == "equalize"
     assert deep_sky["color_balance"] == "background"
     galaxy_detail = make_demo_figures._resolve_display_options("galaxy_detail")
+    assert galaxy_detail["contrast_region"] == "crop"
     assert galaxy_detail["balance_region"] == "full"
-    assert galaxy_detail["color_balance_strength"] == pytest.approx(0.4)
-    assert galaxy_detail["channel_scales"] == (1.0, 0.9, 1.0)
-    assert galaxy_detail["unsharp_sigma"] == pytest.approx(2.0)
-    assert galaxy_detail["unsharp_amount"] == pytest.approx(0.6)
+    assert galaxy_detail["convolution"] == "none"
+    assert galaxy_detail["color_balance_strength"] == pytest.approx(0.35)
+    assert galaxy_detail["channel_scales"] == (1.0, 1.0, 1.0)
+    assert galaxy_detail["unsharp_sigma"] is None
+    assert galaxy_detail["unsharp_amount"] is None
 
 
 def test_explicit_cli_values_override_preset_values():
@@ -356,7 +360,9 @@ def test_explicit_cli_values_override_preset_values():
         color_balance="median",
         color_balance_strength=0.5,
         channel_scales=[1.0, 0.8, 1.1],
+        contrast_region="crop",
         balance_region="crop",
+        convolution="unsharp",
     )
 
     assert options["limits"] == "zscale"
@@ -365,7 +371,11 @@ def test_explicit_cli_values_override_preset_values():
     assert options["color_balance"] == "median"
     assert options["color_balance_strength"] == pytest.approx(0.5)
     assert options["channel_scales"] == (1.0, 0.8, 1.1)
+    assert options["contrast_region"] == "crop"
     assert options["balance_region"] == "crop"
+    assert options["convolution"] == "unsharp"
+    assert options["unsharp_sigma"] == pytest.approx(1.8)
+    assert options["unsharp_amount"] == pytest.approx(0.35)
 
 
 def test_deep_sky_preset_output_is_written(tmp_path, monkeypatch):
@@ -400,6 +410,51 @@ def test_galaxy_detail_preset_crop_output_is_written(tmp_path, monkeypatch, caps
     stdout = capsys.readouterr().out
     assert "requested X,Y=(3, 2)" in stdout
     assert "interpreted NumPy row,col=(1.0, 2.0)" in stdout
+
+
+def test_galaxy_detail_unsharp_crop_output_is_written(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("blue", "green", "red"))
+    _mock_load_fits(monkeypatch)
+
+    written = make_demo_figures.make_demo_figures(
+        "M83",
+        data_root=data_root,
+        preset="galaxy_detail",
+        crop_center=[2, 2],
+        crop_size=3,
+        convolution="unsharp",
+    )
+
+    crop_path = data_root / "M83" / "figures" / "rgb_crop_galaxy_detail_unsharp.png"
+    assert crop_path in written
+    assert crop_path.is_file()
+
+
+def test_convolution_modes_forward_to_enhancement(monkeypatch, tmp_path):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("blue", "green", "red"))
+    _mock_load_fits(monkeypatch)
+    calls = []
+
+    def fake_processed_rgb(*args, **kwargs):
+        calls.append(kwargs)
+        return np.zeros((2, 2, 3), dtype=float)
+
+    monkeypatch.setattr(make_demo_figures.enhancement, "make_processed_rgb", fake_processed_rgb)
+
+    make_demo_figures.make_demo_figures(
+        "M83", data_root=data_root, crop_center=[2, 2], crop_size=2, convolution="smooth"
+    )
+    make_demo_figures.make_demo_figures(
+        "M83", data_root=data_root, crop_center=[2, 2], crop_size=2, convolution="unsharp"
+    )
+
+    assert calls[0]["smooth_sigma"] == pytest.approx(0.8)
+    assert calls[0]["unsharp_sigma"] is None
+    assert calls[1]["smooth_sigma"] is None
+    assert calls[1]["unsharp_sigma"] == pytest.approx(1.8)
+    assert calls[1]["unsharp_amount"] == pytest.approx(0.35)
 
 
 def test_make_demo_figures_forwards_histogram_cli_options(tmp_path, monkeypatch):

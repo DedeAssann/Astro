@@ -30,8 +30,10 @@ VISUALIZATION_PRESETS = {
         "scale": "linear",
         "background_neutralization": "none",
         "color_balance": "none",
-        "color_balance_strength": 1.0,
+        "color_balance_strength": 0.0,
         "channel_scales": (1.0, 1.0, 1.0),
+        "convolution": "none",
+        "contrast_region": "full",
         "balance_region": "full",
         "smooth_sigma": None,
         "unsharp_sigma": None,
@@ -42,8 +44,10 @@ VISUALIZATION_PRESETS = {
         "scale": "squared",
         "background_neutralization": "equalize",
         "color_balance": "background",
-        "color_balance_strength": 1.0,
+        "color_balance_strength": 0.5,
         "channel_scales": (1.0, 1.0, 1.0),
+        "convolution": "none",
+        "contrast_region": "full",
         "balance_region": "full",
         "smooth_sigma": None,
         "unsharp_sigma": None,
@@ -56,6 +60,8 @@ VISUALIZATION_PRESETS = {
         "color_balance": "background",
         "color_balance_strength": 1.0,
         "channel_scales": (1.0, 1.0, 1.0),
+        "convolution": "none",
+        "contrast_region": "full",
         "balance_region": "full",
         "smooth_sigma": None,
         "unsharp_sigma": None,
@@ -66,13 +72,21 @@ VISUALIZATION_PRESETS = {
         "scale": "squared",
         "background_neutralization": "equalize",
         "color_balance": "background",
-        "color_balance_strength": 0.4,
-        "channel_scales": (1.0, 0.9, 1.0),
+        "color_balance_strength": 0.35,
+        "channel_scales": (1.0, 1.0, 1.0),
+        "convolution": "none",
+        "contrast_region": "crop",
         "balance_region": "full",
         "smooth_sigma": None,
-        "unsharp_sigma": 2.0,
-        "unsharp_amount": 0.6,
+        "unsharp_sigma": None,
+        "unsharp_amount": None,
     },
+}
+
+CONVOLUTION_DEFAULTS = {
+    "none": {"smooth_sigma": None, "unsharp_sigma": None, "unsharp_amount": None},
+    "smooth": {"smooth_sigma": 0.8, "unsharp_sigma": None, "unsharp_amount": None},
+    "unsharp": {"smooth_sigma": None, "unsharp_sigma": 1.8, "unsharp_amount": 0.35},
 }
 
 
@@ -101,7 +115,9 @@ def _resolve_display_options(
     color_balance: str | None = None,
     color_balance_strength: float | None = None,
     channel_scales: tuple[float, float, float] | list[float] | None = None,
+    contrast_region: str | None = None,
     balance_region: str | None = None,
+    convolution: str | None = None,
     smooth_sigma: float | None = None,
     unsharp_sigma: float | None = None,
     unsharp_amount: float | None = None,
@@ -114,10 +130,12 @@ def _resolve_display_options(
         "color_balance": "none",
         "color_balance_strength": 1.0,
         "channel_scales": (1.0, 1.0, 1.0),
+        "convolution": "none",
+        "contrast_region": "full",
         "balance_region": "full",
-        "smooth_sigma": smooth_sigma,
-        "unsharp_sigma": unsharp_sigma,
-        "unsharp_amount": unsharp_amount,
+        "smooth_sigma": None,
+        "unsharp_sigma": None,
+        "unsharp_amount": None,
     }
     if preset is not None:
         if preset not in VISUALIZATION_PRESETS:
@@ -137,14 +155,38 @@ def _resolve_display_options(
         options["color_balance_strength"] = color_balance_strength
     if channel_scales is not None:
         options["channel_scales"] = tuple(float(scale) for scale in channel_scales)
+    if contrast_region is not None:
+        options["contrast_region"] = contrast_region
     if balance_region is not None:
         options["balance_region"] = balance_region
-    if smooth_sigma is not None:
+    legacy_smooth_requested = smooth_sigma is not None
+    legacy_unsharp_requested = unsharp_sigma is not None or unsharp_amount is not None
+    if convolution is not None:
+        options["convolution"] = convolution
+    elif legacy_smooth_requested and legacy_unsharp_requested:
+        raise DemoFigureError("smooth and unsharp convolution are mutually exclusive")
+    elif legacy_smooth_requested:
+        options["convolution"] = "smooth"
+    elif legacy_unsharp_requested:
+        options["convolution"] = "unsharp"
+
+    if options["convolution"] not in CONVOLUTION_DEFAULTS:
+        raise DemoFigureError(f"Unknown convolution mode: {options['convolution']}")
+    if convolution == "none" and (legacy_smooth_requested or legacy_unsharp_requested):
+        raise DemoFigureError("--convolution none cannot be combined with smoothing or unsharp parameters")
+    if options["convolution"] == "smooth" and legacy_unsharp_requested:
+        raise DemoFigureError("--convolution smooth cannot be combined with unsharp parameters")
+    if options["convolution"] == "unsharp" and legacy_smooth_requested:
+        raise DemoFigureError("--convolution unsharp cannot be combined with --smooth-sigma")
+
+    options.update(CONVOLUTION_DEFAULTS[str(options["convolution"])])
+    if options["convolution"] == "smooth" and smooth_sigma is not None:
         options["smooth_sigma"] = smooth_sigma
-    if unsharp_sigma is not None:
-        options["unsharp_sigma"] = unsharp_sigma
-    if unsharp_amount is not None:
-        options["unsharp_amount"] = unsharp_amount
+    if options["convolution"] == "unsharp":
+        if unsharp_sigma is not None:
+            options["unsharp_sigma"] = unsharp_sigma
+        if unsharp_amount is not None:
+            options["unsharp_amount"] = unsharp_amount
     return options
 
 
@@ -425,6 +467,7 @@ def _make_galaxy_detail_grid(
             color_balance=color_balance,
             color_balance_strength=color_balance_strength,
             channel_scales=channel_scales,
+            contrast_region="crop" if crop_center is not None and crop_size is not None else "full",
             balance_region=balance_region,
             **panel_kwargs,
         )
@@ -484,7 +527,9 @@ def make_demo_figures(
     color_balance: str | None = None,
     color_balance_strength: float | None = None,
     channel_scales: tuple[float, float, float] | list[float] | None = None,
+    contrast_region: str | None = None,
     balance_region: str | None = None,
+    convolution: str | None = None,
 ) -> list[Path]:
     """Create PNG demo figures from stacked FITS files for one object.
 
@@ -505,7 +550,9 @@ def make_demo_figures(
         color_balance=color_balance,
         color_balance_strength=color_balance_strength,
         channel_scales=channel_scales,
+        contrast_region=contrast_region,
         balance_region=balance_region,
+        convolution=convolution,
         smooth_sigma=smooth_sigma,
         unsharp_sigma=unsharp_sigma,
         unsharp_amount=unsharp_amount,
@@ -516,11 +563,15 @@ def make_demo_figures(
     effective_color_balance = str(display_options["color_balance"])
     effective_color_balance_strength = float(display_options["color_balance_strength"])
     effective_channel_scales = tuple(display_options["channel_scales"])
+    effective_contrast_region = str(display_options["contrast_region"])
     effective_balance_region = str(display_options["balance_region"])
     effective_smooth_sigma = display_options["smooth_sigma"]
     effective_unsharp_sigma = display_options["unsharp_sigma"]
     effective_unsharp_amount = display_options["unsharp_amount"]
     interpreted_crop_center = _interpret_crop_center(crop_center, crop_center_origin)
+    if effective_contrast_region == "crop" and (interpreted_crop_center is None or crop_size is None):
+        print("Warning: contrast_region=crop requested without crop-center/crop-size; falling back to full.")
+        effective_contrast_region = "full"
 
     written_paths: list[Path] = []
     for filter_name, stacked_file in sorted(stacked_files.items()):
@@ -744,7 +795,10 @@ def make_demo_figures(
         if crop_requested:
             if interpreted_crop_center is None or crop_size is None:
                 if preset == "galaxy_detail":
-                    print("Warning: --preset galaxy_detail requested without crop-center/crop-size; using full image.")
+                    print(
+                        "Warning: --preset galaxy_detail requested without crop-center/crop-size; "
+                        "using full image, but a crop is recommended."
+                    )
                     crop_center_for_output = None
                     crop_size_for_output = None
                 else:
@@ -761,16 +815,19 @@ def make_demo_figures(
                     rgb_channel_data["red"].shape, crop_center, interpreted_crop_center, crop_size
                 )
 
-            if preset == "galaxy_detail" or (crop_center_for_output is not None and crop_size_for_output is not None):
+            if preset == "galaxy_detail" or (
+                crop_center_for_output is not None and crop_size_for_output is not None
+            ):
                 crop_scale = effective_scale or ("squared" if ds9like else "squared")
                 suffix = _crop_method_suffix(
                     effective_smooth_sigma, effective_unsharp_sigma, effective_unsharp_amount
                 )
-                output_name = (
-                    "rgb_crop_galaxy_detail.png"
-                    if preset == "galaxy_detail"
-                    else f"rgb_crop_{effective_limits}_{crop_scale}{suffix}.png"
-                )
+                if preset == "galaxy_detail" and crop_center_for_output is None:
+                    output_name = f"rgb_composite_galaxy_detail{suffix}.png"
+                elif preset == "galaxy_detail":
+                    output_name = f"rgb_crop_galaxy_detail{suffix}.png"
+                else:
+                    output_name = f"rgb_crop_{effective_limits}_{crop_scale}{suffix}.png"
                 crop_rgb = enhancement.make_processed_rgb(
                     rgb_channel_data["red"],
                     rgb_channel_data["green"],
@@ -792,6 +849,7 @@ def make_demo_figures(
                     color_balance=effective_color_balance,
                     color_balance_strength=effective_color_balance_strength,
                     channel_scales=effective_channel_scales,
+                    contrast_region=effective_contrast_region,
                     balance_region=effective_balance_region,
                 )
                 _save_rgb(
@@ -959,7 +1017,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "--balance-region",
         choices=["full", "crop"],
         default=None,
-        help="Region used to estimate crop background/color balance (default: full).",
+        help="Advanced region used to estimate background/color balance factors (default: preset value).",
+    )
+    parser.add_argument(
+        "--contrast-region",
+        choices=["full", "crop"],
+        default=None,
+        help="Advanced region used to estimate RGB display limits (default: preset value).",
     )
     parser.add_argument(
         "--lower",
@@ -1019,10 +1083,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Contrast parameter for zscale display limits (default: 0.25).",
     )
     parser.add_argument(
+        "--convolution",
+        choices=["none", "smooth", "unsharp"],
+        default=None,
+        help="Optional RGB PNG convolution: none, Gaussian smoothing, or unsharp masking.",
+    )
+    parser.add_argument(
         "--smooth-sigma",
         type=float,
         default=None,
-        help="Optional Gaussian smoothing sigma for crop outputs (default: disabled).",
+        help="Advanced Gaussian smoothing sigma used with --convolution smooth (default: 0.8).",
     )
     parser.add_argument(
         "--unsharp-sigma",
@@ -1097,7 +1167,9 @@ def main(argv: list[str] | None = None) -> int:
             color_balance=args.color_balance,
             color_balance_strength=args.color_balance_strength,
             channel_scales=args.channel_scales,
+            contrast_region=args.contrast_region,
             balance_region=args.balance_region,
+            convolution=args.convolution,
         )
     except DemoFigureError as exc:
         parser.error(str(exc))
