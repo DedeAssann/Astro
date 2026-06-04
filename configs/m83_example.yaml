@@ -29,3 +29,15 @@ diagnostics:
   lower_percentile: 0.5
   upper_percentile: 99.5
   max_pixels: 1000000
+calibration_qc:
+  enabled: true
+  bias:
+    enabled: true
+    group_tolerance_adu: 5.0
+    reject_outliers: false
+  flats:
+    enabled: true
+    linear_fit_threshold_seconds: 4.0
+    saturation_adu: null
+    max_mean_fraction_of_saturation: 0.8
+    reject_non_linear: false

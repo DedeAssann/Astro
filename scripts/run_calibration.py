@@ -25,6 +25,7 @@ save_fits = None
 calibrate_and_stack = None
 align_stacked_channels = None
 run_pipeline_diagnostics = None
+run_calibration_qc = None
 
 EXPLICIT_INPUT_FIELDS = ("bias_files", "flat_files", "science_files")
 COMPACT_INPUT_FIELDS = ("object_name", "data_root", "filters")
@@ -396,6 +397,92 @@ def _validate_stacking_config(config: dict[str, Any]) -> dict[str, Any]:
 
     return stacking
 
+def _validate_calibration_qc_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Return normalized calibration-frame QC options."""
+    calibration_qc = {
+        "enabled": False,
+        "bias": {
+            "enabled": True,
+            "group_tolerance_adu": 5.0,
+            "reject_outliers": False,
+        },
+        "flats": {
+            "enabled": True,
+            "linear_fit_threshold_seconds": 4.0,
+            "saturation_adu": None,
+            "max_mean_fraction_of_saturation": 0.8,
+            "reject_non_linear": False,
+        },
+    }
+    qc_config = config.get("calibration_qc")
+    if qc_config is None:
+        return calibration_qc
+    if not isinstance(qc_config, dict):
+        raise ConfigError("Config field 'calibration_qc' must be a mapping")
+
+    if "enabled" in qc_config:
+        enabled = qc_config["enabled"]
+        if not isinstance(enabled, bool):
+            raise ConfigError("Config field 'calibration_qc.enabled' must be true or false")
+        calibration_qc["enabled"] = enabled
+
+    if "bias" in qc_config:
+        bias_config = qc_config["bias"]
+        if not isinstance(bias_config, dict):
+            raise ConfigError("Config field 'calibration_qc.bias' must be a mapping")
+        if "enabled" in bias_config:
+            enabled = bias_config["enabled"]
+            if not isinstance(enabled, bool):
+                raise ConfigError("Config field 'calibration_qc.bias.enabled' must be true or false")
+            calibration_qc["bias"]["enabled"] = enabled
+        if "group_tolerance_adu" in bias_config:
+            tolerance = bias_config["group_tolerance_adu"]
+            if not isinstance(tolerance, (int, float)) or isinstance(tolerance, bool) or tolerance <= 0:
+                raise ConfigError("Config field 'calibration_qc.bias.group_tolerance_adu' must be a positive number")
+            calibration_qc["bias"]["group_tolerance_adu"] = float(tolerance)
+        if "reject_outliers" in bias_config:
+            reject_outliers = bias_config["reject_outliers"]
+            if not isinstance(reject_outliers, bool):
+                raise ConfigError("Config field 'calibration_qc.bias.reject_outliers' must be true or false")
+            calibration_qc["bias"]["reject_outliers"] = reject_outliers
+
+    if "flats" in qc_config:
+        flats_config = qc_config["flats"]
+        if not isinstance(flats_config, dict):
+            raise ConfigError("Config field 'calibration_qc.flats' must be a mapping")
+        if "enabled" in flats_config:
+            enabled = flats_config["enabled"]
+            if not isinstance(enabled, bool):
+                raise ConfigError("Config field 'calibration_qc.flats.enabled' must be true or false")
+            calibration_qc["flats"]["enabled"] = enabled
+        if "linear_fit_threshold_seconds" in flats_config:
+            threshold = flats_config["linear_fit_threshold_seconds"]
+            if not isinstance(threshold, (int, float)) or isinstance(threshold, bool) or threshold <= 0:
+                raise ConfigError("Config field 'calibration_qc.flats.linear_fit_threshold_seconds' must be a positive number")
+            calibration_qc["flats"]["linear_fit_threshold_seconds"] = float(threshold)
+        if "saturation_adu" in flats_config:
+            saturation = flats_config["saturation_adu"]
+            if saturation is not None and (
+                not isinstance(saturation, (int, float)) or isinstance(saturation, bool) or saturation <= 0
+            ):
+                raise ConfigError("Config field 'calibration_qc.flats.saturation_adu' must be a positive number or null")
+            calibration_qc["flats"]["saturation_adu"] = None if saturation is None else float(saturation)
+        if "max_mean_fraction_of_saturation" in flats_config:
+            fraction = flats_config["max_mean_fraction_of_saturation"]
+            if not isinstance(fraction, (int, float)) or isinstance(fraction, bool) or not 0 < fraction <= 1:
+                raise ConfigError(
+                    "Config field 'calibration_qc.flats.max_mean_fraction_of_saturation' must be in (0, 1]"
+                )
+            calibration_qc["flats"]["max_mean_fraction_of_saturation"] = float(fraction)
+        if "reject_non_linear" in flats_config:
+            reject_non_linear = flats_config["reject_non_linear"]
+            if not isinstance(reject_non_linear, bool):
+                raise ConfigError("Config field 'calibration_qc.flats.reject_non_linear' must be true or false")
+            calibration_qc["flats"]["reject_non_linear"] = reject_non_linear
+
+    return calibration_qc
+
+
 def _validate_diagnostics_config(config: dict[str, Any]) -> dict[str, Any]:
     """Return normalized diagnostics options."""
     diagnostics = {
@@ -510,6 +597,7 @@ def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
     channel_alignment = _validate_channel_alignment_config(config)
     stacking = _validate_stacking_config(config)
     diagnostics = _validate_diagnostics_config(config)
+    calibration_qc = _validate_calibration_qc_config(config)
 
     sigma = config.get("sigma", 2)
     if not isinstance(sigma, (int, float)) or sigma <= 0:
@@ -531,6 +619,7 @@ def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
         "channel_alignment": channel_alignment,
         "stacking": stacking,
         "diagnostics": diagnostics,
+        "calibration_qc": calibration_qc,
         "sigma": sigma,
         "maxiters": maxiters,
     }
@@ -556,7 +645,7 @@ def _ensure_input_files_exist(paths: list[Path]) -> None:
 def _get_pipeline_functions():
     """Import pipeline helpers lazily after config and file validation."""
     global make_master_bias, make_master_flat, load_fits, save_fits
-    global calibrate_and_stack, align_stacked_channels, run_pipeline_diagnostics
+    global calibrate_and_stack, align_stacked_channels, run_pipeline_diagnostics, run_calibration_qc
     if make_master_bias is None or make_master_flat is None:
         from astro_image_lab.calibration import make_master_bias as imported_make_master_bias
         from astro_image_lab.calibration import make_master_flat as imported_make_master_flat
@@ -585,6 +674,12 @@ def _get_pipeline_functions():
         )
 
         run_pipeline_diagnostics = imported_run_pipeline_diagnostics
+    if run_calibration_qc is None:
+        from astro_image_lab.diagnostics import (
+            run_calibration_qc as imported_run_calibration_qc,
+        )
+
+        run_calibration_qc = imported_run_calibration_qc
     return (
         make_master_bias,
         make_master_flat,
@@ -593,6 +688,7 @@ def _get_pipeline_functions():
         calibrate_and_stack,
         align_stacked_channels,
         run_pipeline_diagnostics,
+        run_calibration_qc,
     )
 
 
@@ -646,6 +742,7 @@ def run_pipeline(config_path: Path) -> list[Path]:
         stack_science,
         align_channels,
         diagnose_pipeline,
+        qc_calibration,
     ) = _get_pipeline_functions()
 
     output_dirs = config["output_dirs"]
@@ -665,6 +762,27 @@ def run_pipeline(config_path: Path) -> list[Path]:
     fits_saver(master_bias, bias_header, master_bias_path)
     written_files.append(master_bias_path)
     print(f"Wrote {master_bias_path}")
+
+    calibration_qc = config["calibration_qc"]
+    if calibration_qc["enabled"]:
+        qc_dir = output_dirs["analysis"] / "diagnostics"
+        qc_files, _qc_messages, selected_bias_files, selected_flat_files = qc_calibration(
+            bias_files=config["bias_files"],
+            flat_files=config["flat_files"],
+            master_bias=master_bias,
+            output_dir=qc_dir,
+            config=calibration_qc,
+        )
+        written_files.extend(qc_files)
+        for qc_file in qc_files:
+            print(f"Wrote {qc_file}")
+        if selected_bias_files != config["bias_files"]:
+            config["bias_files"] = selected_bias_files
+            master_bias = make_bias(config["bias_files"])
+            _bias_data, bias_header = fits_loader(config["bias_files"][0])
+            fits_saver(master_bias, bias_header, master_bias_path)
+            print(f"Wrote {master_bias_path}")
+        config["flat_files"] = selected_flat_files
 
     for filter_name in sorted(config["science_files"]):
         master_flat = make_flat(config["flat_files"][filter_name], master_bias)

@@ -17,6 +17,7 @@ The scientific goal of V1 is to provide a transparent teaching and portfolio pip
 - **Calibration helpers** for master-bias creation, normalized master-flat creation, and science-frame calibration.
 - **Stacking and alignment helpers** for calibrated-unit stacking by default, optional legacy median normalization, optional `astroalign` registration, sigma clipping, and mean stacking.
 - **YAML-driven CLI pipeline** that validates inputs and writes master calibration products plus stacked science images.
+- **Calibration QC diagnostics** for per-frame bias statistics, bias ADU-regime warnings, flat exposure-time linearity curves, saturation checks, and CSV/PNG reports before master-flat stacking.
 - **Diagnostics helpers** for calibration and stacking pixel-distribution histograms, robust finite-pixel statistics, reproducible frame sampling, and CSV diagnostics reports.
 - **Visualization and enhancement helpers** for percentile scaling, single-image plots, histograms, before/after comparisons, simple RGB composites, and display-only RGB enhancement with background subtraction, color balancing, asinh stretch, and gamma correction.
 - **Photometry and galaxy-analysis helpers** for circular aperture fluxes, growth curves, effective radius estimates, distance modulus, absolute magnitude conversion, and pixel-to-kpc conversion.
@@ -101,6 +102,18 @@ diagnostics:
   lower_percentile: 0.5
   upper_percentile: 99.5
   max_pixels: 1000000
+calibration_qc:
+  enabled: true
+  bias:
+    enabled: true
+    group_tolerance_adu: 5.0
+    reject_outliers: false
+  flats:
+    enabled: true
+    linear_fit_threshold_seconds: 4.0
+    saturation_adu: null
+    max_mean_fraction_of_saturation: 0.8
+    reject_non_linear: false
 ```
 
 The inferred local data layout is:
@@ -122,14 +135,15 @@ data/<OBJECT_NAME>/
 └── analysis/
 ```
 
-The CLI accepts `.fits`, `.fit`, and `.fts` filenames case-insensitively, sorts discovered lists for reproducibility, and creates output directories when needed. If `diagnostics.enabled` is true, the pipeline also writes calibration and stacking diagnostic plots under `data/<OBJECT_NAME>/analysis/diagnostics/`. For each configured science filter, it writes:
+The CLI accepts `.fits`, `.fit`, and `.fts` filenames case-insensitively, sorts discovered lists for reproducibility, and creates output directories when needed. If `calibration_qc.enabled` or `diagnostics.enabled` is true, the pipeline also writes diagnostic products under `data/<OBJECT_NAME>/analysis/diagnostics/`. For each configured science filter, it writes:
 
 - `master_bias.fits` to `data/<OBJECT_NAME>/calibrated/`
 - `master_flat_<filter>.fits` to `data/<OBJECT_NAME>/calibrated/`
 - `stacked_<filter>.fits` to `data/<OBJECT_NAME>/stacked/`
 - `alignment_report.csv` to `data/<OBJECT_NAME>/analysis/`
 - When channel alignment is enabled, `stacked/aligned_channels/stacked_<filter>_aligned.fits` and `analysis/channel_alignment_report.csv`
-- When diagnostics are enabled, `analysis/diagnostics/pixel_statistics.csv`, `analysis/diagnostics/bias_frame_statistics.csv`, and histogram/line-plot PNGs for bias, flats, science calibration, optional stacking normalization, and stacking
+- When calibration QC is enabled, `analysis/diagnostics/bias_frame_statistics.csv`, `flat_frame_statistics.csv`, `calibration_qc_warnings.txt`, `bias_frame_mean_median_distribution.png`, and one `flat_<filter>_linearity_curve.png` per filter
+- When diagnostics are enabled, `analysis/diagnostics/pixel_statistics.csv` and histogram PNGs for random bias/master-bias, flat/master-flat, science calibration, optional stacking normalization, and stacking comparisons
 
 
 
@@ -146,13 +160,21 @@ With this setting, science frames are calibrated and then stacked without median
 
 Set `stacking.normalize_before_stack: true` only to reproduce the older notebook/script behavior where each calibrated science frame is divided by its median before stacking; this creates final stacks centered around roughly 1 rather than calibrated ADU-like units.
 
-### Calibration diagnostics
+### Calibration QC and diagnostics
 
-The optional `diagnostics` config section is observational only: it does not modify calibration, alignment, stacking, or RGB enhancement algorithms. When enabled, `scripts/run_calibration.py` creates `data/<OBJECT_NAME>/analysis/diagnostics/` automatically and writes:
+`calibration_qc` is separate from the later `diagnostics` histogram suite. When `calibration_qc.enabled: true`, `scripts/run_calibration.py` creates `data/<OBJECT_NAME>/analysis/diagnostics/` before master flats are built and writes:
+
+- `bias_frame_statistics.csv`, listing per-bias `file`, finite-pixel statistics, `shape`, and FITS metadata (`EXPTIME`, `GAIN`, `OFFSET`, `CCD-TEMP`/`TEMP`, and `DATE-OBS`) when present.
+- `bias_frame_mean_median_distribution.png`, plotting per-bias-frame mean/median ADU against frame index/file name with horizontal master-bias mean/median reference lines.
+- `flat_frame_statistics.csv`, listing per-flat `file`, `filter`, `EXPTIME`, finite-pixel statistics, and `shape`.
+- `flat_<filter>_linearity_curve.png`, with all flat mean ADU values versus `EXPTIME` and a NumPy linear fit over `EXPTIME <= calibration_qc.flats.linear_fit_threshold_seconds`.
+- `calibration_qc_warnings.txt`, including bias ADU-regime warnings, missing/insufficient flat `EXPTIME` warnings, saturation-threshold warnings when `saturation_adu` is configured, and max mean/p99 ADU reports when saturation is not configured.
+
+By default calibration QC is diagnostic-only: `reject_outliers: false` retains all bias frames, and `reject_non_linear: false` retains all flats for master-flat creation. Set either rejection flag explicitly only after reviewing the QC outputs.
+
+The optional `diagnostics` config section remains observational only: it does not modify calibration, alignment, stacking, or RGB enhancement algorithms. When enabled after the calibration/stacking products exist, it writes:
 
 - `bias_random_vs_master_hist.png`, comparing one deterministic raw bias frame with `master_bias.fits`.
-- `bias_frame_statistics.csv`, listing `file`, `mean`, `median`, `std`, `min`, `max`, `p1`, `p99`, and `finite_fraction` for every bias frame.
-- `bias_frame_mean_distribution.png`, plotting per-bias-frame mean/median ADU against frame index/file name with horizontal master-bias mean/median reference lines.
 - `flat_<filter>_random_vs_master_hist.png`, comparing one deterministic bias-subtracted, median-normalized flat with `master_flat_<filter>.fits`.
 - `science_<filter>_before_after_calibration_hist.png`, comparing one deterministic raw science frame with the same frame after calibration.
 - `science_<filter>_calibrated_vs_normalized_hist.png` when `stacking.normalize_before_stack: true`, comparing the calibrated sample science frame with its median-normalized copy.
