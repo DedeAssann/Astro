@@ -331,6 +331,9 @@ def test_visualization_presets_map_to_expected_parameters():
         "color_balance_strength": 0.0,
         "channel_scales": (1.0, 1.0, 1.0),
         "convolution": "none",
+        "masked_unsharp": False,
+        "mask_percentile": 65,
+        "mask_softness": 1.0,
         "contrast_region": "full",
         "balance_region": "full",
         "smooth_sigma": None,
@@ -345,11 +348,14 @@ def test_visualization_presets_map_to_expected_parameters():
     galaxy_detail = make_demo_figures._resolve_display_options("galaxy_detail")
     assert galaxy_detail["contrast_region"] == "crop"
     assert galaxy_detail["balance_region"] == "full"
-    assert galaxy_detail["convolution"] == "none"
+    assert galaxy_detail["convolution"] == "masked_unsharp"
+    assert galaxy_detail["masked_unsharp"] is True
+    assert galaxy_detail["mask_percentile"] == pytest.approx(65)
+    assert galaxy_detail["mask_softness"] == pytest.approx(1.0)
     assert galaxy_detail["color_balance_strength"] == pytest.approx(0.35)
     assert galaxy_detail["channel_scales"] == (1.0, 1.0, 1.0)
-    assert galaxy_detail["unsharp_sigma"] is None
-    assert galaxy_detail["unsharp_amount"] is None
+    assert galaxy_detail["unsharp_sigma"] == pytest.approx(1.8)
+    assert galaxy_detail["unsharp_amount"] == pytest.approx(0.35)
 
 
 def test_explicit_cli_values_override_preset_values():
@@ -449,12 +455,26 @@ def test_convolution_modes_forward_to_enhancement(monkeypatch, tmp_path):
     make_demo_figures.make_demo_figures(
         "M83", data_root=data_root, crop_center=[2, 2], crop_size=2, convolution="unsharp"
     )
+    make_demo_figures.make_demo_figures(
+        "M83",
+        data_root=data_root,
+        crop_center=[2, 2],
+        crop_size=2,
+        convolution="masked_unsharp",
+        mask_percentile=70,
+        mask_softness=1.5,
+    )
 
     assert calls[0]["smooth_sigma"] == pytest.approx(0.8)
     assert calls[0]["unsharp_sigma"] is None
+    assert calls[0]["masked_unsharp"] is False
     assert calls[1]["smooth_sigma"] is None
     assert calls[1]["unsharp_sigma"] == pytest.approx(1.8)
     assert calls[1]["unsharp_amount"] == pytest.approx(0.35)
+    assert calls[1]["masked_unsharp"] is False
+    assert calls[2]["masked_unsharp"] is True
+    assert calls[2]["mask_percentile"] == pytest.approx(70)
+    assert calls[2]["mask_softness"] == pytest.approx(1.5)
 
 
 def test_make_demo_figures_forwards_histogram_cli_options(tmp_path, monkeypatch):

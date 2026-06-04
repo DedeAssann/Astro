@@ -19,7 +19,7 @@ The scientific goal of V1 is to provide a transparent teaching and portfolio pip
 - **YAML-driven CLI pipeline** that validates inputs and writes master calibration products plus stacked science images.
 - **Calibration QC diagnostics** for per-frame bias statistics, bias ADU-regime warnings, flat exposure-time linearity curves, saturation checks, and CSV/PNG reports before master-flat stacking.
 - **Diagnostics helpers** for calibration and stacking pixel-distribution histograms, robust finite-pixel statistics, reproducible frame sampling, and CSV diagnostics reports.
-- **Visualization and enhancement helpers** for percentile scaling, single-image plots, histograms, before/after comparisons, simple RGB composites, display-only RGB presets, DS9-like zscale limits, RGB background neutralization/color balancing, adaptive full-frame versus crop-local contrast, linear/squared/cubed/sqrt/log/asinh/gamma display scales, Gaussian smoothing, unsharp masking, and galaxy-centered crop products.
+- **Visualization and enhancement helpers** for percentile scaling, single-image plots, histograms, before/after comparisons, simple RGB composites, display-only RGB presets, DS9-like zscale limits, RGB background neutralization/color balancing, adaptive full-frame versus crop-local contrast, linear/squared/cubed/sqrt/log/asinh/gamma display scales, Gaussian smoothing, unsharp masking, masked unsharp masking, and galaxy-centered crop products.
 - **Photometry and galaxy-analysis helpers** for circular aperture fluxes, growth curves, effective radius estimates, distance modulus, absolute magnitude conversion, and pixel-to-kpc conversion.
 - **Tests** covering calibration math, stacking behavior, visualization utilities, photometry utilities, and CLI config validation.
 
@@ -211,25 +211,25 @@ python scripts/make_demo_figures.py --object M83 --preset galaxy_detail \
   --crop-center 2120 2060 --crop-size 1400
 ```
 
-A mild unsharp mask is available explicitly when the crop needs extra local edge definition:
+The `galaxy_detail` preset uses masked unsharp masking by default so bright arms and core structure sharpen without boosting dark-background noise. Raw unsharp masking remains available explicitly when you want to compare against the unmasked method:
 
 ```bash
 python scripts/make_demo_figures.py --object M83 --preset galaxy_detail \
   --crop-center 2120 2060 --crop-size 1400 --convolution unsharp
 ```
 
-Primary visualization controls are `--object`, `--data-root`, `--filters`, `--preset diagnostic|natural|deep_sky|galaxy_detail`, `--crop-center X Y`, `--crop-center-origin 0|1`, `--crop-size SIZE`, `--convolution none|smooth|unsharp`, and the histogram controls `--hist-lower-percentile`, `--hist-upper-percentile`, and `--hist-bins`. Crop centers are supplied as display-style `X Y` coordinates (x=column, y=row); the code converts those to NumPy row/column indexing and prints the interpreted center and clipped crop bounds.
+Primary visualization controls are `--object`, `--data-root`, `--filters`, `--preset diagnostic|natural|deep_sky|galaxy_detail`, `--crop-center X Y`, `--crop-center-origin 0|1`, `--crop-size SIZE`, `--convolution none|smooth|unsharp|masked_unsharp`, `--mask-percentile`, `--mask-softness`, and the histogram controls `--hist-lower-percentile`, `--hist-upper-percentile`, and `--hist-bins`. Crop centers are supplied as display-style `X Y` coordinates (x=column, y=row); the code converts those to NumPy row/column indexing and prints the interpreted center and clipped crop bounds.
 
 Preset behavior is:
 
 - `diagnostic`: zscale + linear, no background neutralization, no color balance, full-frame contrast.
 - `natural`: zscale + squared, background equalization, partial background color balance, full-frame contrast.
 - `deep_sky`: zscale + cubed, background equalization, full background color balance, full-frame contrast.
-- `galaxy_detail`: zscale + squared, background equalization, gentle background color balance, crop-local contrast, full-frame balance; crop recommended.
+- `galaxy_detail`: zscale + squared, background equalization, gentle background color balance, crop-local contrast, full-frame balance, masked unsharp detail enhancement; crop recommended.
 
-All RGB preset, crop, smoothing, and unsharp outputs are PNG-only visualization products. They load calibrated/stacked FITS arrays into memory but do not modify calibrated, stacked, or aligned FITS science data.
+All RGB preset, crop, smoothing, unsharp, and masked-unsharp outputs are PNG-only visualization products. They load calibrated/stacked FITS arrays into memory but do not modify calibrated, stacked, or aligned FITS science data.
 
-Advanced overrides remain available but are intentionally secondary to the presets: `--rgb-limits zscale|percentile`, `--rgb-scale linear|squared|cubed|sqrt|log|asinh|gamma`, `--background-neutralization none|subtract|equalize`, `--background-percentile`, `--color-balance none|background|median|max`, `--color-balance-strength`, `--channel-scales R G B`, `--smooth-sigma`, `--unsharp-sigma`, `--unsharp-amount`, `--zscale-contrast`, `--lower`, `--upper`, `--gamma`, `--stretch`, `--contrast-region full|crop`, and `--balance-region full|crop`. The older `--ds9like`, manual named-scale outputs, and `--galaxy-detail-grid` comparison output remain available as explicit advanced/debug tools; large comparison grids are not generated unless requested.
+Advanced overrides remain available but are intentionally secondary to the presets: `--rgb-limits zscale|percentile`, `--rgb-scale linear|squared|cubed|sqrt|log|asinh|gamma`, `--background-neutralization none|subtract|equalize`, `--background-percentile`, `--color-balance none|background|median|max`, `--color-balance-strength`, `--channel-scales R G B`, `--smooth-sigma`, `--unsharp-sigma`, `--unsharp-amount`, `--mask-percentile`, `--mask-softness`, `--zscale-contrast`, `--lower`, `--upper`, `--gamma`, `--stretch`, `--contrast-region full|crop`, and `--balance-region full|crop`. The older `--ds9like`, manual named-scale outputs, and `--galaxy-detail-grid` comparison output remain available as explicit advanced/debug tools; large comparison grids are not generated unless requested.
 
 
 Alignment remains enabled by default and can still be controlled with the legacy top-level `align: true` or `align: false` flag. New configs can use an `alignment` block for diagnostics and tuning; when `alignment.enabled` is present, it overrides the legacy `align` value. The default settings preserve the previous behavior:

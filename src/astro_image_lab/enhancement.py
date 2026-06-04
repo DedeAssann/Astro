@@ -204,6 +204,60 @@ def unsharp_mask(image, sigma=2.0, amount=0.6) -> np.ndarray:
     return np.clip(enhanced, 0.0, 1.0)
 
 
+def rgb_luminance(rgb) -> np.ndarray:
+    """Return finite-safe display luminance for an RGB image."""
+    safe_rgb = _as_rgb_array(rgb)
+    return (
+        0.2126 * safe_rgb[..., 0]
+        + 0.7152 * safe_rgb[..., 1]
+        + 0.0722 * safe_rgb[..., 2]
+    )
+
+
+def signal_mask_from_luminance(rgb, percentile=65, softness=1.0) -> np.ndarray:
+    """Build a softened signal mask from RGB luminance.
+
+    Pixels brighter than the requested luminance percentile receive mask value
+    one before optional Gaussian softening; darker background pixels receive
+    zero. The returned mask is clipped to ``[0, 1]`` and has shape
+    ``(height, width)``.
+    """
+    if not 0 <= percentile <= 100:
+        raise ValueError("percentile must be between 0 and 100")
+    if softness < 0:
+        raise ValueError("softness must be non-negative")
+
+    luminance = rgb_luminance(rgb)
+    finite_values = _finite_values(luminance)
+    if finite_values.size == 0:
+        return np.zeros(luminance.shape, dtype=float)
+
+    threshold = float(np.percentile(finite_values, percentile))
+    mask = (luminance >= threshold).astype(float)
+    if softness > 0:
+        mask = gaussian_smooth(mask, sigma=softness)
+    return np.clip(mask, 0.0, 1.0)
+
+
+def masked_unsharp_mask(
+    image,
+    sigma=1.8,
+    amount=0.35,
+    mask_percentile=65,
+    mask_softness=1.0,
+) -> np.ndarray:
+    """Apply unsharp masking only where luminance indicates source signal."""
+    original = _as_rgb_array(image)
+    mask = signal_mask_from_luminance(
+        original,
+        percentile=mask_percentile,
+        softness=mask_softness,
+    )
+    sharpened = unsharp_mask(original, sigma=sigma, amount=amount)
+    blended = mask[..., np.newaxis] * sharpened + (1.0 - mask[..., np.newaxis]) * original
+    return np.clip(blended, 0.0, 1.0)
+
+
 def crop_bounds(image_shape, center, size) -> tuple[int, int, int, int]:
     """Return clipped crop bounds for a DS9-style ``[x, y]`` center.
 
@@ -579,6 +633,9 @@ def make_processed_rgb(
     smooth_sigma=None,
     unsharp_sigma=None,
     unsharp_amount=None,
+    masked_unsharp=False,
+    mask_percentile=65,
+    mask_softness=1.0,
     background_neutralization="none",
     background_percentile=10,
     color_balance="none",
@@ -636,11 +693,22 @@ def make_processed_rgb(
     )
     rgb = apply_display_scale(rgb, scale=scale, gamma=gamma, stretch=stretch)
 
-    if smooth_sigma is not None and (unsharp_sigma is not None or unsharp_amount is not None):
-        raise ValueError("smooth and unsharp convolution cannot be applied simultaneously")
+    has_unsharp = unsharp_sigma is not None or unsharp_amount is not None
+    if smooth_sigma is not None and (has_unsharp or masked_unsharp):
+        raise ValueError("smooth and sharpening convolution cannot be applied simultaneously")
     if smooth_sigma is not None:
         rgb = np.clip(gaussian_smooth(rgb, sigma=smooth_sigma), 0.0, 1.0)
-    if unsharp_sigma is not None or unsharp_amount is not None:
+    if masked_unsharp:
+        sigma = 1.8 if unsharp_sigma is None else unsharp_sigma
+        amount = 0.35 if unsharp_amount is None else unsharp_amount
+        rgb = masked_unsharp_mask(
+            rgb,
+            sigma=sigma,
+            amount=amount,
+            mask_percentile=mask_percentile,
+            mask_softness=mask_softness,
+        )
+    elif has_unsharp:
         sigma = 1.8 if unsharp_sigma is None else unsharp_sigma
         amount = 0.35 if unsharp_amount is None else unsharp_amount
         rgb = unsharp_mask(rgb, sigma=sigma, amount=amount)
