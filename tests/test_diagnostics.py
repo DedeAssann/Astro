@@ -111,3 +111,110 @@ def test_bias_frame_statistics_csv_and_distribution_plot(tmp_path, monkeypatch):
     assert "file,mean,median,std,min,max,p1,p99,finite_fraction" in csv_path.read_text(encoding="utf-8")
     assert png_path.exists()
     assert png_path.read_bytes().startswith(b"\x89PNG")
+
+
+def test_bias_regime_warning_when_means_exceed_tolerance():
+    from astro_image_lab.diagnostics import detect_bias_regime_warnings
+
+    warnings = detect_bias_regime_warnings(
+        [{"mean": 533.2}, {"mean": 560.1}],
+        group_tolerance_adu=5.0,
+    )
+
+    assert len(warnings) == 1
+    assert "multiple ADU regimes" in warnings[0]
+    assert "range=26.9 ADU" in warnings[0]
+
+
+def test_flat_statistics_extracts_exptime_and_plot(tmp_path, monkeypatch):
+    from astro_image_lab import diagnostics
+
+    flat_files = {
+        "red": [tmp_path / "flat_1.fits", tmp_path / "flat_2.fits", tmp_path / "flat_5.fits"]
+    }
+    arrays = {
+        flat_files["red"][0]: np.full((3, 3), 1000.0),
+        flat_files["red"][1]: np.full((3, 3), 2000.0),
+        flat_files["red"][2]: np.full((3, 3), 5100.0),
+    }
+    headers = {
+        flat_files["red"][0]: {"EXPTIME": 1.0},
+        flat_files["red"][1]: {"EXPTIME": 2.0},
+        flat_files["red"][2]: {"EXPTIME": 5.0},
+    }
+    for paths in flat_files.values():
+        for path in paths:
+            path.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setattr(diagnostics, "load_fits", lambda path: (arrays[Path(path)], headers[Path(path)]))
+
+    records = diagnostics.compute_flat_frame_statistics(flat_files)
+    csv_path = tmp_path / "flat_frame_statistics.csv"
+    png_path = tmp_path / "flat_red_linearity_curve.png"
+    diagnostics.write_flat_frame_statistics_csv(records, csv_path)
+    warnings = diagnostics.plot_flat_linearity_curve(
+        records,
+        filter_name="red",
+        linear_fit_threshold_seconds=4.0,
+        output_path=png_path,
+    )
+
+    assert [record["EXPTIME"] for record in records] == [1.0, 2.0, 5.0]
+    assert [record["filter"] for record in records] == ["red", "red", "red"]
+    assert "file,filter,EXPTIME,mean,median,std,min,max,p1,p99,finite_fraction,shape" in csv_path.read_text(encoding="utf-8")
+    assert warnings == []
+    assert png_path.exists()
+    assert png_path.read_bytes().startswith(b"\x89PNG")
+
+
+def test_flat_linearity_missing_exptime_warning(tmp_path):
+    from astro_image_lab import diagnostics
+
+    records = [
+        {"file": "flat_missing.fits", "filter": "blue", "EXPTIME": "", "mean": 1000.0, "p99": 1010.0},
+        {"file": "flat_1.fits", "filter": "blue", "EXPTIME": 1.0, "mean": 1100.0, "p99": 1110.0},
+    ]
+
+    warnings = diagnostics.plot_flat_linearity_curve(
+        records,
+        filter_name="blue",
+        linear_fit_threshold_seconds=4.0,
+        output_path=tmp_path / "flat_blue_linearity_curve.png",
+    )
+
+    assert any("missing or invalid EXPTIME" in warning for warning in warnings)
+    assert any("insufficient EXPTIME points" in warning for warning in warnings)
+
+
+def test_calibration_qc_default_does_not_reject_frames(tmp_path, monkeypatch):
+    from astro_image_lab import diagnostics
+
+    bias_files = [tmp_path / "bias_low.fits", tmp_path / "bias_high.fits"]
+    flat_files = {"red": [tmp_path / "flat_1.fits", tmp_path / "flat_10.fits"]}
+    arrays = {
+        bias_files[0]: np.full((4, 4), 533.0),
+        bias_files[1]: np.full((4, 4), 560.0),
+        flat_files["red"][0]: np.full((4, 4), 1000.0),
+        flat_files["red"][1]: np.full((4, 4), 9000.0),
+    }
+    headers = {
+        bias_files[0]: {},
+        bias_files[1]: {},
+        flat_files["red"][0]: {"EXPTIME": 1.0},
+        flat_files["red"][1]: {"EXPTIME": 10.0},
+    }
+    for path in [*bias_files, *flat_files["red"]]:
+        path.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setattr(diagnostics, "load_fits", lambda path: (arrays[Path(path)], headers[Path(path)]))
+
+    written, messages, selected_bias, selected_flats = diagnostics.run_calibration_qc(
+        bias_files=bias_files,
+        flat_files=flat_files,
+        master_bias=np.full((4, 4), 550.0),
+        output_dir=tmp_path / "diagnostics",
+        config={"enabled": True},
+    )
+
+    assert selected_bias == bias_files
+    assert selected_flats == flat_files
+    assert any("multiple ADU regimes" in message for message in messages)
+    assert tmp_path / "diagnostics" / "calibration_qc_warnings.txt" in written

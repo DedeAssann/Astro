@@ -39,7 +39,45 @@ BIAS_FRAME_STATISTICS_FIELDNAMES = [
     "p1",
     "p99",
     "finite_fraction",
+    "shape",
+    "EXPTIME",
+    "GAIN",
+    "OFFSET",
+    "CCD-TEMP",
+    "TEMP",
+    "DATE-OBS",
 ]
+
+FLAT_FRAME_STATISTICS_FIELDNAMES = [
+    "file",
+    "filter",
+    "EXPTIME",
+    "mean",
+    "median",
+    "std",
+    "min",
+    "max",
+    "p1",
+    "p99",
+    "finite_fraction",
+    "shape",
+]
+
+DEFAULT_CALIBRATION_QC_CONFIG = {
+    "enabled": False,
+    "bias": {
+        "enabled": True,
+        "group_tolerance_adu": 5.0,
+        "reject_outliers": False,
+    },
+    "flats": {
+        "enabled": True,
+        "linear_fit_threshold_seconds": 4.0,
+        "saturation_adu": None,
+        "max_mean_fraction_of_saturation": 0.8,
+        "reject_non_linear": False,
+    },
+}
 
 DEFAULT_DIAGNOSTIC_CONFIG = {
     "enabled": False,
@@ -224,27 +262,6 @@ def _write_statistics_csv(records: list[dict[str, Any]], output_path: Path) -> N
         for record in records:
             writer.writerow({field: record.get(field, "") for field in STATISTICS_FIELDNAMES})
 
-
-def compute_bias_frame_statistics(bias_files: list[Path] | tuple[Path, ...]) -> list[dict[str, Any]]:
-    """Compute one finite-pixel statistics record for every bias frame."""
-    records: list[dict[str, Any]] = []
-    for bias_path in sorted(Path(path) for path in bias_files):
-        bias_data, _header = load_fits(bias_path)
-        stats = compute_pixel_statistics(bias_data, source_path=bias_path)
-        records.append(
-            {
-                "file": str(bias_path),
-                "mean": stats["mean"],
-                "median": stats["median"],
-                "std": stats["std"],
-                "min": stats["min"],
-                "max": stats["max"],
-                "p1": stats["p1"],
-                "p99": stats["p99"],
-                "finite_fraction": stats["finite_fraction"],
-            }
-        )
-    return records
 
 
 def write_bias_frame_statistics_csv(records: list[dict[str, Any]], output_path: Path) -> None:
@@ -480,3 +497,336 @@ def run_pipeline_diagnostics(
     _write_statistics_csv(records, statistics_path)
     written.append(statistics_path)
     return written
+
+
+def _header_value(header: Any, *keys: str) -> Any:
+    """Return the first present FITS header value from ``keys``."""
+    if header is None:
+        return ""
+    for key in keys:
+        try:
+            value = header.get(key, "")
+        except AttributeError:
+            value = ""
+        if value not in (None, ""):
+            return value
+    return ""
+
+
+def _shape_label(array: Any) -> str:
+    """Return a compact, CSV-friendly image-shape label."""
+    return "x".join(str(item) for item in np.shape(array))
+
+
+def _frame_stats_record(path: Path, data: Any, header: Any, *, filter_name: str | None = None) -> dict[str, Any]:
+    stats = compute_pixel_statistics(data, source_path=path, filter_name=filter_name)
+    record: dict[str, Any] = {
+        "file": str(path),
+        "mean": stats["mean"],
+        "median": stats["median"],
+        "std": stats["std"],
+        "min": stats["min"],
+        "max": stats["max"],
+        "p1": stats["p1"],
+        "p99": stats["p99"],
+        "finite_fraction": stats["finite_fraction"],
+        "shape": _shape_label(data),
+    }
+    if filter_name is not None:
+        record["filter"] = filter_name
+    return record
+
+
+def compute_bias_frame_statistics(bias_files: list[Path] | tuple[Path, ...]) -> list[dict[str, Any]]:
+    """Compute finite-pixel statistics and acquisition metadata for every bias frame."""
+    records: list[dict[str, Any]] = []
+    for bias_path in sorted(Path(path) for path in bias_files):
+        bias_data, header = load_fits(bias_path)
+        record = _frame_stats_record(bias_path, bias_data, header)
+        record.update(
+            {
+                "EXPTIME": _header_value(header, "EXPTIME"),
+                "GAIN": _header_value(header, "GAIN"),
+                "OFFSET": _header_value(header, "OFFSET"),
+                "CCD-TEMP": _header_value(header, "CCD-TEMP"),
+                "TEMP": _header_value(header, "TEMP"),
+                "DATE-OBS": _header_value(header, "DATE-OBS"),
+            }
+        )
+        records.append(record)
+    return records
+
+
+def compute_flat_frame_statistics(flat_files: dict[str, list[Path]] | dict[str, tuple[Path, ...]]) -> list[dict[str, Any]]:
+    """Compute finite-pixel statistics and exposure metadata for every flat frame."""
+    records: list[dict[str, Any]] = []
+    for filter_name in sorted(flat_files):
+        for flat_path in sorted(Path(path) for path in flat_files[filter_name]):
+            flat_data, header = load_fits(flat_path)
+            record = _frame_stats_record(flat_path, flat_data, header, filter_name=filter_name)
+            record["EXPTIME"] = _header_value(header, "EXPTIME")
+            records.append(record)
+    return records
+
+
+def write_flat_frame_statistics_csv(records: list[dict[str, Any]], output_path: Path) -> None:
+    """Write per-flat-frame statistics to CSV."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=FLAT_FRAME_STATISTICS_FIELDNAMES)
+        writer.writeheader()
+        for record in records:
+            writer.writerow({field: record.get(field, "") for field in FLAT_FRAME_STATISTICS_FIELDNAMES})
+
+
+def detect_bias_regime_warnings(records: list[dict[str, Any]], group_tolerance_adu: float) -> list[str]:
+    """Return warnings when per-frame bias means span multiple ADU regimes."""
+    means = np.asarray([record.get("mean", np.nan) for record in records], dtype=float)
+    means = means[np.isfinite(means)]
+    if means.size == 0:
+        return ["Bias QC could not compute finite means for any bias frame."]
+    min_mean = float(np.min(means))
+    max_mean = float(np.max(means))
+    mean_range = max_mean - min_mean
+    if mean_range > group_tolerance_adu:
+        return [
+            "Bias frames appear to contain multiple ADU regimes: "
+            f"min mean={min_mean:.1f}, max mean={max_mean:.1f}, range={mean_range:.1f} ADU."
+        ]
+    return []
+
+
+def _write_calibration_qc_messages(messages: list[str], output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    text = "\n".join(messages)
+    if text:
+        text += "\n"
+    output_path.write_text(text, encoding="utf-8")
+
+
+def _safe_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def _sanitized_filter_name(filter_name: str) -> str:
+    return "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in filter_name)
+
+
+def plot_flat_linearity_curve(
+    records: list[dict[str, Any]],
+    *,
+    filter_name: str,
+    linear_fit_threshold_seconds: float,
+    output_path: Path,
+) -> list[str]:
+    """Plot mean ADU vs EXPTIME and a short-exposure linear fit for one flat filter."""
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
+    filter_records = [record for record in records if record.get("filter") == filter_name]
+    exposures = np.asarray([_safe_float(record.get("EXPTIME")) for record in filter_records], dtype=float)
+    means = np.asarray([_safe_float(record.get("mean")) for record in filter_records], dtype=float)
+    p99_values = np.asarray([_safe_float(record.get("p99")) for record in filter_records], dtype=float)
+    valid = np.isfinite(exposures) & np.isfinite(means)
+    warnings: list[str] = []
+
+    if not np.all(np.isfinite(exposures)):
+        missing_count = int(np.size(exposures) - np.count_nonzero(np.isfinite(exposures)))
+        warnings.append(
+            f"Flat QC for filter {filter_name} has {missing_count} frame(s) with missing or invalid EXPTIME; "
+            "linearity fitting used only valid EXPTIME values."
+        )
+
+    order = np.argsort(exposures[valid]) if np.any(valid) else np.asarray([], dtype=int)
+    valid_exposures = exposures[valid][order] if np.any(valid) else np.asarray([], dtype=float)
+    valid_means = means[valid][order] if np.any(valid) else np.asarray([], dtype=float)
+    linear_mask = valid_exposures <= linear_fit_threshold_seconds
+    linear_exposures = valid_exposures[linear_mask]
+    linear_means = valid_means[linear_mask]
+
+    slope = float("nan")
+    intercept = float("nan")
+    if linear_exposures.size >= 2:
+        slope, intercept = [float(value) for value in np.polyfit(linear_exposures, linear_means, 1)]
+    else:
+        warnings.append(
+            f"Flat QC for filter {filter_name} has insufficient EXPTIME points in the linear region "
+            f"(<= {linear_fit_threshold_seconds:g} s) for a fit."
+        )
+
+    max_mean = float(np.nanmax(means)) if means.size and np.any(np.isfinite(means)) else float("nan")
+    max_p99 = float(np.nanmax(p99_values)) if p99_values.size and np.any(np.isfinite(p99_values)) else float("nan")
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    axes[0].plot(valid_exposures, valid_means, marker="o", linestyle="-", label="all flats")
+    axes[0].set_title(f"Flat linearity ({filter_name})")
+    axes[0].set_xlabel("EXPTIME (s)")
+    axes[0].set_ylabel("Mean ADU")
+    axes[0].grid(alpha=0.25)
+    axes[0].legend(fontsize="small")
+
+    axes[1].plot(linear_exposures, linear_means, marker="o", linestyle="", label="linear-region flats")
+    if np.isfinite(slope) and np.isfinite(intercept) and linear_exposures.size:
+        x_fit = np.linspace(float(np.min(linear_exposures)), float(np.max(linear_exposures)), 100)
+        axes[1].plot(x_fit, slope * x_fit + intercept, linestyle="--", label="linear fit")
+    axes[1].set_title(f"Linear fit: EXPTIME <= {linear_fit_threshold_seconds:g} s")
+    axes[1].set_xlabel("EXPTIME (s)")
+    axes[1].set_ylabel("Mean ADU")
+    axes[1].grid(alpha=0.25)
+    axes[1].legend(fontsize="small")
+    axes[1].text(
+        0.03,
+        0.97,
+        "\n".join(
+            [
+                f"slope={slope:.4g}",
+                f"intercept={intercept:.4g}",
+                f"max mean={max_mean:.4g} ADU",
+                f"max p99={max_p99:.4g} ADU",
+                f"n linear={linear_exposures.size}",
+            ]
+        ),
+        transform=axes[1].transAxes,
+        va="top",
+        ha="left",
+        bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.8},
+        fontsize="small",
+    )
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+    return warnings
+
+
+def _flat_qc_messages(
+    records: list[dict[str, Any]],
+    *,
+    saturation_adu: float | None,
+    max_mean_fraction_of_saturation: float,
+) -> list[str]:
+    messages: list[str] = []
+    for filter_name in sorted({str(record.get("filter", "")) for record in records}):
+        filter_records = [record for record in records if record.get("filter") == filter_name]
+        means = np.asarray([_safe_float(record.get("mean")) for record in filter_records], dtype=float)
+        p99_values = np.asarray([_safe_float(record.get("p99")) for record in filter_records], dtype=float)
+        max_mean = float(np.nanmax(means)) if means.size and np.any(np.isfinite(means)) else float("nan")
+        max_p99 = float(np.nanmax(p99_values)) if p99_values.size and np.any(np.isfinite(p99_values)) else float("nan")
+        if saturation_adu is None:
+            messages.append(f"Flat QC filter {filter_name}: max mean={max_mean:.1f} ADU, max p99={max_p99:.1f} ADU.")
+            continue
+        threshold = max_mean_fraction_of_saturation * saturation_adu
+        if np.isfinite(max_mean) and max_mean > threshold:
+            messages.append(
+                f"Flat frames for filter {filter_name} exceed the configured saturation safety threshold: "
+                f"max mean={max_mean:.1f} ADU, threshold={threshold:.1f} ADU "
+                f"({max_mean_fraction_of_saturation:.2g} x saturation_adu={saturation_adu:.1f})."
+            )
+    return messages
+
+
+def select_linear_flat_files(flat_records: list[dict[str, Any]], linear_fit_threshold_seconds: float) -> dict[str, list[Path]]:
+    """Return flat files with valid EXPTIME values inside the configured linear region."""
+    selected: dict[str, list[Path]] = {}
+    for record in flat_records:
+        exptime = _safe_float(record.get("EXPTIME"))
+        if np.isfinite(exptime) and exptime <= linear_fit_threshold_seconds:
+            selected.setdefault(str(record["filter"]), []).append(Path(record["file"]))
+    return {filter_name: sorted(paths) for filter_name, paths in selected.items()}
+
+
+def run_calibration_qc(
+    *,
+    bias_files: list[Path],
+    flat_files: dict[str, list[Path]],
+    master_bias: Any,
+    output_dir: Path,
+    config: dict[str, Any] | None = None,
+) -> tuple[list[Path], list[str], list[Path], dict[str, list[Path]]]:
+    """Run V2.7 calibration-frame QC and return written files plus optional filtered inputs."""
+    options = {**DEFAULT_CALIBRATION_QC_CONFIG, **(config or {})}
+    bias_options = {**DEFAULT_CALIBRATION_QC_CONFIG["bias"], **options.get("bias", {})}
+    flat_options = {**DEFAULT_CALIBRATION_QC_CONFIG["flats"], **options.get("flats", {})}
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    written: list[Path] = []
+    messages: list[str] = []
+    selected_bias_files = [Path(path) for path in bias_files]
+    selected_flat_files = {name: [Path(path) for path in paths] for name, paths in flat_files.items()}
+
+    if bias_options["enabled"]:
+        bias_records = compute_bias_frame_statistics(bias_files)
+        bias_csv = output_dir / "bias_frame_statistics.csv"
+        write_bias_frame_statistics_csv(bias_records, bias_csv)
+        written.append(bias_csv)
+        bias_plot = output_dir / "bias_frame_mean_median_distribution.png"
+        plot_bias_frame_mean_distribution(bias_records, master_bias=master_bias, output_path=bias_plot)
+        written.append(bias_plot)
+        messages.extend(detect_bias_regime_warnings(bias_records, float(bias_options["group_tolerance_adu"])))
+        if bias_options.get("reject_outliers"):
+            means = np.asarray([_safe_float(record.get("mean")) for record in bias_records], dtype=float)
+            median_mean = float(np.nanmedian(means)) if np.any(np.isfinite(means)) else float("nan")
+            kept = [
+                Path(record["file"])
+                for record in bias_records
+                if np.isfinite(_safe_float(record.get("mean")))
+                and abs(_safe_float(record.get("mean")) - median_mean) <= float(bias_options["group_tolerance_adu"])
+            ]
+            if kept:
+                selected_bias_files = sorted(kept)
+                messages.append(
+                    f"Bias QC reject_outliers enabled: using {len(selected_bias_files)} of {len(bias_records)} bias frame(s)."
+                )
+            else:
+                messages.append("Bias QC reject_outliers enabled but no frames passed; retaining all bias frames.")
+
+    if flat_options["enabled"]:
+        flat_records = compute_flat_frame_statistics(flat_files)
+        flat_csv = output_dir / "flat_frame_statistics.csv"
+        write_flat_frame_statistics_csv(flat_records, flat_csv)
+        written.append(flat_csv)
+        threshold = float(flat_options["linear_fit_threshold_seconds"])
+        for filter_name in sorted(flat_files):
+            flat_plot = output_dir / f"flat_{_sanitized_filter_name(filter_name)}_linearity_curve.png"
+            messages.extend(
+                plot_flat_linearity_curve(
+                    flat_records,
+                    filter_name=filter_name,
+                    linear_fit_threshold_seconds=threshold,
+                    output_path=flat_plot,
+                )
+            )
+            written.append(flat_plot)
+        saturation = flat_options.get("saturation_adu")
+        saturation_value = None if saturation is None else float(saturation)
+        messages.extend(
+            _flat_qc_messages(
+                flat_records,
+                saturation_adu=saturation_value,
+                max_mean_fraction_of_saturation=float(flat_options["max_mean_fraction_of_saturation"]),
+            )
+        )
+        if flat_options.get("reject_non_linear"):
+            linear_files = select_linear_flat_files(flat_records, threshold)
+            for filter_name in selected_flat_files:
+                if linear_files.get(filter_name):
+                    selected_flat_files[filter_name] = linear_files[filter_name]
+                    messages.append(
+                        f"Flat QC reject_non_linear enabled for filter {filter_name}: "
+                        f"using {len(linear_files[filter_name])} of {len(flat_files[filter_name])} flat frame(s)."
+                    )
+                else:
+                    messages.append(
+                        f"Flat QC reject_non_linear enabled for filter {filter_name} but no valid linear-region flats passed; "
+                        "retaining all flat frames for this filter."
+                    )
+
+    warning_path = output_dir / "calibration_qc_warnings.txt"
+    _write_calibration_qc_messages(messages, warning_path)
+    written.append(warning_path)
+    return written, messages, selected_bias_files, selected_flat_files

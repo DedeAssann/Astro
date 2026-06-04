@@ -631,3 +631,66 @@ def test_run_pipeline_does_not_trigger_diagnostics_when_absent(tmp_path, monkeyp
     monkeypatch.setattr(run_calibration, "run_pipeline_diagnostics", fail_if_called)
 
     run_calibration.run_pipeline(config_path)
+
+
+def test_validate_config_calibration_qc_defaults_disabled(tmp_path):
+    files = _input_files(tmp_path)
+    validated = run_calibration._validate_config(
+        {
+            "bias_files": [str(files["bias"])],
+            "flat_files": {"red": [str(files["flat"])]},
+            "science_files": {"red": [str(files["science"])]},
+            "output_dir": str(tmp_path / "out"),
+        }
+    )
+
+    assert validated["calibration_qc"] == {
+        "enabled": False,
+        "bias": {"enabled": True, "group_tolerance_adu": 5.0, "reject_outliers": False},
+        "flats": {
+            "enabled": True,
+            "linear_fit_threshold_seconds": 4.0,
+            "saturation_adu": None,
+            "max_mean_fraction_of_saturation": 0.8,
+            "reject_non_linear": False,
+        },
+    }
+
+
+def test_run_pipeline_triggers_calibration_qc_without_default_rejection(tmp_path, monkeypatch):
+    files = _input_files(tmp_path)
+    output_dir = tmp_path / "results"
+    config_path = tmp_path / "config.yaml"
+    _write_legacy_config(config_path, output_dir, files)
+    with config_path.open("a", encoding="utf-8") as config_file:
+        config_file.write(
+            "calibration_qc:\n"
+            "  enabled: true\n"
+            "  bias:\n"
+            "    group_tolerance_adu: 5.0\n"
+            "  flats:\n"
+            "    linear_fit_threshold_seconds: 4.0\n"
+        )
+    calls, _saved, master_bias, _master_flat = _mock_pipeline_helpers(monkeypatch)
+    qc_calls = []
+
+    def fake_run_calibration_qc(**kwargs):
+        qc_calls.append(kwargs)
+        output_path = kwargs["output_dir"] / "calibration_qc_warnings.txt"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("", encoding="utf-8")
+        return [output_path], [], kwargs["bias_files"], kwargs["flat_files"]
+
+    monkeypatch.setattr(run_calibration, "run_calibration_qc", fake_run_calibration_qc)
+
+    written = run_calibration.run_pipeline(config_path)
+
+    assert len(qc_calls) == 1
+    assert qc_calls[0]["bias_files"] == [files["bias"]]
+    assert qc_calls[0]["flat_files"] == {"red": [files["flat"]]}
+    assert qc_calls[0]["master_bias"] == master_bias
+    assert qc_calls[0]["output_dir"] == output_dir / "diagnostics"
+    assert qc_calls[0]["config"]["enabled"] is True
+    assert calls["bias_paths"] == [files["bias"]]
+    assert calls["flat_args"][tmp_path.name] == ([files["flat"]], master_bias)
+    assert output_dir / "diagnostics" / "calibration_qc_warnings.txt" in written
