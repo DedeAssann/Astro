@@ -202,32 +202,73 @@ def unsharp_mask(image, sigma=2.0, amount=0.6) -> np.ndarray:
     return np.clip(enhanced, 0.0, 1.0)
 
 
-def crop_image(image, center=None, size=None) -> np.ndarray:
-    """Crop a 2D or RGB image using an ``[x, y]`` center convention.
+def crop_bounds(image_shape, center, size) -> tuple[int, int, int, int]:
+    """Return clipped crop bounds for a DS9-style ``[x, y]`` center.
 
-    ``center`` is documented and accepted as image/display coordinates
-    ``[x, y]`` (column, row). Internally this is converted to NumPy row/column
-    indexing. If ``center`` or ``size`` is omitted, the original image object is
-    returned. Crop bounds are clipped safely at image edges.
+    Parameters
+    ----------
+    image_shape : tuple
+        Shape of a 2D image or RGB array. Only the first two dimensions are
+        used as ``height, width``.
+    center : sequence of float
+        Zero-based image coordinates as ``[x, y]`` (column, row). This mirrors
+        DS9's x/y order, while the returned bounds are NumPy row/column slices.
+    size : float
+        Requested square crop size in pixels. Bounds are clipped at image edges.
+
+    Returns
+    -------
+    tuple[int, int, int, int]
+        ``(row_start, row_stop, col_start, col_stop)`` suitable for NumPy
+        slicing.
+    """
+    if len(image_shape) < 2:
+        raise ValueError("image_shape must include height and width")
+    if size <= 0:
+        raise ValueError("size must be greater than zero")
+    if len(center) != 2:
+        raise ValueError("center must contain X and Y coordinates")
+
+    height, width = int(image_shape[0]), int(image_shape[1])
+    center_x, center_y = float(center[0]), float(center[1])
+    crop_size = int(round(float(size)))
+    if crop_size <= 0:
+        raise ValueError("size must round to at least one pixel")
+
+    # Use x/y image coordinates for the requested center, then convert to
+    # NumPy row/column slices. Odd sizes put the center pixel in the middle;
+    # even sizes are biased one pixel toward lower row/column indices.
+    col_start = int(np.floor(center_x - (crop_size - 1) / 2.0))
+    row_start = int(np.floor(center_y - (crop_size - 1) / 2.0))
+    col_stop = col_start + crop_size
+    row_stop = row_start + crop_size
+
+    row_start = max(0, row_start)
+    col_start = max(0, col_start)
+    row_stop = max(row_start, min(height, row_stop))
+    col_stop = max(col_start, min(width, col_stop))
+    return row_start, row_stop, col_start, col_stop
+
+
+def crop_image(image, center=None, size=None) -> np.ndarray:
+    """Crop a 2D or RGB image using a zero-based ``[x, y]`` center.
+
+    ``center`` is accepted as image/display coordinates ``[x, y]`` (column,
+    row), matching DS9's coordinate order. Internally this is converted to NumPy
+    ``row, col = y, x`` indexing. If ``center`` or ``size`` is omitted, the
+    original image object is returned. Crop bounds are clipped safely at image
+    edges.
     """
     array = np.asarray(image)
     if center is None or size is None:
         return array
     if array.ndim not in {2, 3}:
         raise ValueError("crop_image supports 2D grayscale or RGB-like arrays")
-    if size <= 0:
-        raise ValueError("size must be greater than zero")
-    if len(center) != 2:
-        raise ValueError("center must contain X and Y coordinates")
 
-    center_x, center_y = float(center[0]), float(center[1])
-    crop_size = int(round(float(size)))
-    half = crop_size / 2.0
-    x0 = max(0, int(np.floor(center_x - half)))
-    x1 = min(array.shape[1], int(np.ceil(center_x + half)))
-    y0 = max(0, int(np.floor(center_y - half)))
-    y1 = min(array.shape[0], int(np.ceil(center_y + half)))
-    return array[y0:y1, x0:x1, ...] if array.ndim == 3 else array[y0:y1, x0:x1]
+    row_start, row_stop, col_start, col_stop = crop_bounds(array.shape, center, size)
+    if array.ndim == 3:
+        return array[row_start:row_stop, col_start:col_stop, ...]
+    return array[row_start:row_stop, col_start:col_stop]
 
 
 def estimate_channel_background(channel, percentile=10) -> float:

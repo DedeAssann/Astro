@@ -305,3 +305,76 @@ def test_cli_accepts_rgb_background_and_color_balance_options(tmp_path, monkeypa
     stdout = capsys.readouterr().out
     assert "ds9like background estimates" in stdout
     assert "ds9like color balance factors" in stdout
+
+
+def test_crop_center_origin_one_shifts_center_by_one_pixel():
+    assert make_demo_figures._interpret_crop_center([7, 3], crop_center_origin=0) == [7.0, 3.0]
+    assert make_demo_figures._interpret_crop_center([7, 3], crop_center_origin=1) == [6.0, 2.0]
+
+
+def test_visualization_presets_map_to_expected_parameters():
+    assert make_demo_figures._resolve_display_options("diagnostic") == {
+        "limits": "zscale",
+        "scale": "linear",
+        "background_neutralization": "none",
+        "color_balance": "none",
+        "smooth_sigma": None,
+        "unsharp_sigma": None,
+        "unsharp_amount": None,
+    }
+    assert make_demo_figures._resolve_display_options("natural")["scale"] == "squared"
+    deep_sky = make_demo_figures._resolve_display_options("deep_sky")
+    assert deep_sky["scale"] == "cubed"
+    assert deep_sky["background_neutralization"] == "equalize"
+    assert deep_sky["color_balance"] == "background"
+    galaxy_detail = make_demo_figures._resolve_display_options("galaxy_detail")
+    assert galaxy_detail["unsharp_sigma"] == pytest.approx(2.0)
+    assert galaxy_detail["unsharp_amount"] == pytest.approx(0.6)
+
+
+def test_explicit_cli_values_override_preset_values():
+    options = make_demo_figures._resolve_display_options(
+        "deep_sky",
+        rgb_scale="squared",
+        background_neutralization="none",
+        color_balance="median",
+    )
+
+    assert options["limits"] == "zscale"
+    assert options["scale"] == "squared"
+    assert options["background_neutralization"] == "none"
+    assert options["color_balance"] == "median"
+
+
+def test_deep_sky_preset_output_is_written(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("blue", "green", "red"))
+    _mock_load_fits(monkeypatch)
+
+    written = make_demo_figures.make_demo_figures("M83", data_root=data_root, preset="deep_sky")
+
+    deep_sky_path = data_root / "M83" / "figures" / "rgb_composite_deep_sky.png"
+    assert deep_sky_path in written
+    assert deep_sky_path.is_file()
+
+
+def test_galaxy_detail_preset_crop_output_is_written(tmp_path, monkeypatch, capsys):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("blue", "green", "red"))
+    _mock_load_fits(monkeypatch)
+
+    written = make_demo_figures.make_demo_figures(
+        "M83",
+        data_root=data_root,
+        preset="galaxy_detail",
+        crop_center=[3, 2],
+        crop_size=2,
+        crop_center_origin=1,
+    )
+
+    crop_path = data_root / "M83" / "figures" / "rgb_crop_galaxy_detail.png"
+    assert crop_path in written
+    assert crop_path.is_file()
+    stdout = capsys.readouterr().out
+    assert "requested X,Y=(3, 2)" in stdout
+    assert "interpreted NumPy row,col=(1.0, 2.0)" in stdout

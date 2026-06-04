@@ -24,6 +24,101 @@ class DemoFigureError(ValueError):
     """Raised when demo figure inputs cannot be resolved."""
 
 
+VISUALIZATION_PRESETS = {
+    "diagnostic": {
+        "limits": "zscale",
+        "scale": "linear",
+        "background_neutralization": "none",
+        "color_balance": "none",
+        "smooth_sigma": None,
+        "unsharp_sigma": None,
+        "unsharp_amount": None,
+    },
+    "natural": {
+        "limits": "zscale",
+        "scale": "squared",
+        "background_neutralization": "equalize",
+        "color_balance": "background",
+        "smooth_sigma": None,
+        "unsharp_sigma": None,
+        "unsharp_amount": None,
+    },
+    "deep_sky": {
+        "limits": "zscale",
+        "scale": "cubed",
+        "background_neutralization": "equalize",
+        "color_balance": "background",
+        "smooth_sigma": None,
+        "unsharp_sigma": None,
+        "unsharp_amount": None,
+    },
+    "galaxy_detail": {
+        "limits": "zscale",
+        "scale": "squared",
+        "background_neutralization": "equalize",
+        "color_balance": "background",
+        "smooth_sigma": None,
+        "unsharp_sigma": 2.0,
+        "unsharp_amount": 0.6,
+    },
+}
+
+
+def _resolve_display_options(
+    preset: str | None = None,
+    rgb_limits: str | None = None,
+    rgb_scale: str | None = None,
+    background_neutralization: str | None = None,
+    color_balance: str | None = None,
+    smooth_sigma: float | None = None,
+    unsharp_sigma: float | None = None,
+    unsharp_amount: float | None = None,
+) -> dict[str, object]:
+    """Resolve preset display options, with explicit values overriding presets."""
+    options = {
+        "limits": "zscale",
+        "scale": rgb_scale,
+        "background_neutralization": "none",
+        "color_balance": "none",
+        "smooth_sigma": smooth_sigma,
+        "unsharp_sigma": unsharp_sigma,
+        "unsharp_amount": unsharp_amount,
+    }
+    if preset is not None:
+        if preset not in VISUALIZATION_PRESETS:
+            raise DemoFigureError(f"Unknown visualization preset: {preset}")
+        options.update(VISUALIZATION_PRESETS[preset])
+
+    if rgb_limits is not None:
+        options["limits"] = rgb_limits
+    if rgb_scale is not None:
+        options["scale"] = rgb_scale
+    if background_neutralization is not None:
+        options["background_neutralization"] = background_neutralization
+    if color_balance is not None:
+        options["color_balance"] = color_balance
+    if smooth_sigma is not None:
+        options["smooth_sigma"] = smooth_sigma
+    if unsharp_sigma is not None:
+        options["unsharp_sigma"] = unsharp_sigma
+    if unsharp_amount is not None:
+        options["unsharp_amount"] = unsharp_amount
+    return options
+
+
+def _interpret_crop_center(crop_center, crop_center_origin: int = 0):
+    """Convert requested x/y crop center to zero-based x/y coordinates."""
+    if crop_center is None:
+        return None
+    if crop_center_origin not in {0, 1}:
+        raise DemoFigureError("crop_center_origin must be 0 or 1")
+    if len(crop_center) != 2:
+        raise DemoFigureError("crop_center must contain X and Y coordinates")
+    center_x = float(crop_center[0]) - crop_center_origin
+    center_y = float(crop_center[1]) - crop_center_origin
+    return [center_x, center_y]
+
+
 def _discover_stacked_files(stacked_dir: Path) -> dict[str, Path]:
     """Discover stacked FITS files and map filter names to file paths."""
     if not stacked_dir.exists():
@@ -115,6 +210,23 @@ def _crop_method_suffix(smooth_sigma, unsharp_sigma, unsharp_amount) -> str:
     if has_unsharp:
         return "_unsharp"
     return ""
+
+
+def _print_crop_interpretation(image_shape, requested_center, interpreted_center, crop_size) -> None:
+    """Log how CLI x/y crop coordinates map to NumPy row/column bounds."""
+    if requested_center is None or interpreted_center is None or crop_size is None:
+        return
+    row_start, row_stop, col_start, col_stop = enhancement.crop_bounds(
+        image_shape, interpreted_center, crop_size
+    )
+    print(
+        "Crop center requested X,Y="
+        f"({requested_center[0]}, {requested_center[1]}); "
+        "interpreted NumPy row,col="
+        f"({interpreted_center[1]}, {interpreted_center[0]}); "
+        "crop bounds rows="
+        f"{row_start}:{row_stop}, cols={col_start}:{col_stop}"
+    )
 
 
 def _scaled_rgb_for_color_log(
@@ -280,7 +392,8 @@ def make_demo_figures(
     lower: float = 0.5,
     upper: float = 99.5,
     ds9like: bool = False,
-    rgb_limits: str = "zscale",
+    preset: str | None = None,
+    rgb_limits: str | None = None,
     rgb_scale: str | None = None,
     zscale_contrast: float = 0.25,
     smooth_sigma: float | None = None,
@@ -288,21 +401,40 @@ def make_demo_figures(
     unsharp_amount: float | None = None,
     crop_center: list[float] | tuple[float, float] | None = None,
     crop_size: float | None = None,
+    crop_center_origin: int = 0,
     galaxy_detail_grid: bool = False,
-    background_neutralization: str = "none",
-    color_balance: str = "none",
+    background_neutralization: str | None = None,
+    color_balance: str | None = None,
 ) -> list[Path]:
     """Create PNG demo figures from stacked FITS files for one object.
 
-    All DS9-like scaling, crops, smoothing, and sharpening are visualization-only
-    PNG post-processing steps. Calibrated and stacked FITS data are never
-    modified by this command.
+    Presets and advanced display controls are visualization-only PNG
+    post-processing steps. Calibrated and stacked FITS data are never modified.
     """
     data_root = Path(data_root)
     stacked_dir = data_root / object_name / "stacked"
     stacked_files = _resolve_stacked_files(data_root, object_name, filters)
     figures_dir = data_root / object_name / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
+
+    display_options = _resolve_display_options(
+        preset=preset,
+        rgb_limits=rgb_limits,
+        rgb_scale=rgb_scale,
+        background_neutralization=background_neutralization,
+        color_balance=color_balance,
+        smooth_sigma=smooth_sigma,
+        unsharp_sigma=unsharp_sigma,
+        unsharp_amount=unsharp_amount,
+    )
+    effective_limits = str(display_options["limits"])
+    effective_scale = display_options["scale"]
+    effective_background_neutralization = str(display_options["background_neutralization"])
+    effective_color_balance = str(display_options["color_balance"])
+    effective_smooth_sigma = display_options["smooth_sigma"]
+    effective_unsharp_sigma = display_options["unsharp_sigma"]
+    effective_unsharp_amount = display_options["unsharp_amount"]
+    interpreted_crop_center = _interpret_crop_center(crop_center, crop_center_origin)
 
     written_paths: list[Path] = []
     for filter_name, stacked_file in sorted(stacked_files.items()):
@@ -375,9 +507,9 @@ def make_demo_figures(
                 upper=upper,
                 gamma=gamma,
                 stretch=stretch,
-                background_neutralization=background_neutralization,
+                background_neutralization=effective_background_neutralization,
                 background_percentile=background_percentile,
-                color_balance=color_balance,
+                color_balance=effective_color_balance,
             )
             _save_rgb(
                 figures_dir / "rgb_composite_ds9like.png",
@@ -389,9 +521,9 @@ def make_demo_figures(
                 zscale_contrast=zscale_contrast,
                 gamma=gamma,
                 stretch=stretch,
-                background_neutralization=background_neutralization,
+                background_neutralization=effective_background_neutralization,
                 background_percentile=background_percentile,
-                color_balance=color_balance,
+                color_balance=effective_color_balance,
             )
             _print_color_adjustment_log(
                 "ds9like",
@@ -400,136 +532,211 @@ def make_demo_figures(
                 zscale_contrast=zscale_contrast,
                 lower=lower,
                 upper=upper,
-                background_neutralization=background_neutralization,
+                background_neutralization=effective_background_neutralization,
                 background_percentile=background_percentile,
-                color_balance=color_balance,
+                color_balance=effective_color_balance,
             )
 
-        if rgb_scale is not None:
-            scaled_rgb = enhancement.make_display_rgb(
+        if preset is not None and preset != "galaxy_detail":
+            if effective_scale is None:
+                raise DemoFigureError(f"Preset {preset} did not define an RGB scale")
+            preset_rgb = enhancement.make_display_rgb(
                 rgb_channel_data["red"],
                 rgb_channel_data["green"],
                 rgb_channel_data["blue"],
-                limits=rgb_limits,
-                scale=rgb_scale,
+                limits=effective_limits,
+                scale=effective_scale,
                 zscale_contrast=zscale_contrast,
                 lower=lower,
                 upper=upper,
                 gamma=gamma,
                 stretch=stretch,
-                background_neutralization=background_neutralization,
+                background_neutralization=effective_background_neutralization,
                 background_percentile=background_percentile,
-                color_balance=color_balance,
+                color_balance=effective_color_balance,
             )
             _save_rgb(
-                figures_dir / f"rgb_composite_{rgb_limits}_{rgb_scale}.png",
-                scaled_rgb,
+                figures_dir / f"rgb_composite_{preset}.png",
+                preset_rgb,
                 written_paths,
-                "rgb-scale",
-                limits=rgb_limits,
-                scale=rgb_scale,
+                f"preset:{preset}",
+                limits=effective_limits,
+                scale=effective_scale,
                 zscale_contrast=zscale_contrast,
                 lower=lower,
                 upper=upper,
                 gamma=gamma,
                 stretch=stretch,
-                background_neutralization=background_neutralization,
+                background_neutralization=effective_background_neutralization,
                 background_percentile=background_percentile,
-                color_balance=color_balance,
+                color_balance=effective_color_balance,
+            )
+            _print_color_adjustment_log(
+                f"preset:{preset}",
+                rgb_channel_data,
+                limits=effective_limits,
+                zscale_contrast=zscale_contrast,
+                lower=lower,
+                upper=upper,
+                background_neutralization=effective_background_neutralization,
+                background_percentile=background_percentile,
+                color_balance=effective_color_balance,
+            )
+
+        if preset is None and rgb_scale is not None:
+            advanced_rgb = enhancement.make_display_rgb(
+                rgb_channel_data["red"],
+                rgb_channel_data["green"],
+                rgb_channel_data["blue"],
+                limits=effective_limits,
+                scale=effective_scale,
+                zscale_contrast=zscale_contrast,
+                lower=lower,
+                upper=upper,
+                gamma=gamma,
+                stretch=stretch,
+                background_neutralization=effective_background_neutralization,
+                background_percentile=background_percentile,
+                color_balance=effective_color_balance,
+            )
+            _save_rgb(
+                figures_dir / f"rgb_composite_{effective_limits}_{effective_scale}.png",
+                advanced_rgb,
+                written_paths,
+                "rgb-scale",
+                limits=effective_limits,
+                scale=effective_scale,
+                zscale_contrast=zscale_contrast,
+                lower=lower,
+                upper=upper,
+                gamma=gamma,
+                stretch=stretch,
+                background_neutralization=effective_background_neutralization,
+                background_percentile=background_percentile,
+                color_balance=effective_color_balance,
             )
             _print_color_adjustment_log(
                 "rgb-scale",
                 rgb_channel_data,
-                limits=rgb_limits,
+                limits=effective_limits,
                 zscale_contrast=zscale_contrast,
                 lower=lower,
                 upper=upper,
-                background_neutralization=background_neutralization,
+                background_neutralization=effective_background_neutralization,
                 background_percentile=background_percentile,
-                color_balance=color_balance,
+                color_balance=effective_color_balance,
             )
 
-        crop_requested = crop_center is not None or crop_size is not None
+        crop_requested = interpreted_crop_center is not None or crop_size is not None or preset == "galaxy_detail"
         if crop_requested:
-            if crop_center is None or crop_size is None:
-                print(
-                    "Warning: both --crop-center and --crop-size are required for crop "
-                    "outputs; no crop output was written."
-                )
+            if interpreted_crop_center is None or crop_size is None:
+                if preset == "galaxy_detail":
+                    print("Warning: --preset galaxy_detail requested without crop-center/crop-size; using full image.")
+                    crop_center_for_output = None
+                    crop_size_for_output = None
+                else:
+                    print(
+                        "Warning: both --crop-center and --crop-size are required for crop "
+                        "outputs; no crop output was written."
+                    )
+                    crop_center_for_output = None
+                    crop_size_for_output = None
             else:
-                crop_scale = rgb_scale or ("squared" if ds9like else "squared")
-                suffix = _crop_method_suffix(smooth_sigma, unsharp_sigma, unsharp_amount)
+                crop_center_for_output = interpreted_crop_center
+                crop_size_for_output = crop_size
+                _print_crop_interpretation(
+                    rgb_channel_data["red"].shape, crop_center, interpreted_crop_center, crop_size
+                )
+
+            if preset == "galaxy_detail" or (crop_center_for_output is not None and crop_size_for_output is not None):
+                crop_scale = effective_scale or ("squared" if ds9like else "squared")
+                suffix = _crop_method_suffix(
+                    effective_smooth_sigma, effective_unsharp_sigma, effective_unsharp_amount
+                )
+                output_name = (
+                    "rgb_crop_galaxy_detail.png"
+                    if preset == "galaxy_detail"
+                    else f"rgb_crop_{effective_limits}_{crop_scale}{suffix}.png"
+                )
                 crop_rgb = enhancement.make_processed_rgb(
                     rgb_channel_data["red"],
                     rgb_channel_data["green"],
                     rgb_channel_data["blue"],
-                    limits=rgb_limits,
+                    limits=effective_limits,
                     scale=crop_scale,
                     zscale_contrast=zscale_contrast,
                     lower=lower,
                     upper=upper,
                     gamma=gamma,
                     stretch=stretch,
-                    crop_center=crop_center,
-                    crop_size=crop_size,
-                    smooth_sigma=smooth_sigma,
-                    unsharp_sigma=unsharp_sigma,
-                    unsharp_amount=unsharp_amount,
-                    background_neutralization=background_neutralization,
+                    crop_center=crop_center_for_output,
+                    crop_size=crop_size_for_output,
+                    smooth_sigma=effective_smooth_sigma,
+                    unsharp_sigma=effective_unsharp_sigma,
+                    unsharp_amount=effective_unsharp_amount,
+                    background_neutralization=effective_background_neutralization,
                     background_percentile=background_percentile,
-                    color_balance=color_balance,
+                    color_balance=effective_color_balance,
                 )
                 _save_rgb(
-                    figures_dir / f"rgb_crop_{rgb_limits}_{crop_scale}{suffix}.png",
+                    figures_dir / output_name,
                     crop_rgb,
                     written_paths,
-                    "crop",
-                    limits=rgb_limits,
+                    "crop" if preset != "galaxy_detail" else "preset:galaxy_detail",
+                    limits=effective_limits,
                     scale=crop_scale,
-                    crop_center=crop_center,
-                    crop_size=crop_size,
-                    smooth_sigma=smooth_sigma,
-                    unsharp_sigma=unsharp_sigma,
-                    unsharp_amount=unsharp_amount,
+                    crop_center=crop_center_for_output,
+                    crop_size=crop_size_for_output,
+                    smooth_sigma=effective_smooth_sigma,
+                    unsharp_sigma=effective_unsharp_sigma,
+                    unsharp_amount=effective_unsharp_amount,
                     gamma=gamma,
                     stretch=stretch,
-                    background_neutralization=background_neutralization,
+                    background_neutralization=effective_background_neutralization,
                     background_percentile=background_percentile,
-                    color_balance=color_balance,
+                    color_balance=effective_color_balance,
                 )
                 _print_color_adjustment_log(
-                    "crop",
+                    "crop" if preset != "galaxy_detail" else "preset:galaxy_detail",
                     rgb_channel_data,
-                    limits=rgb_limits,
+                    limits=effective_limits,
                     zscale_contrast=zscale_contrast,
                     lower=lower,
                     upper=upper,
-                    background_neutralization=background_neutralization,
+                    background_neutralization=effective_background_neutralization,
                     background_percentile=background_percentile,
-                    color_balance=color_balance,
-                    crop_center=crop_center,
-                    crop_size=crop_size,
+                    color_balance=effective_color_balance,
+                    crop_center=crop_center_for_output,
+                    crop_size=crop_size_for_output,
                 )
 
         if galaxy_detail_grid:
-            if crop_center is None or crop_size is None:
+            if interpreted_crop_center is None or crop_size is None:
                 print("Warning: --galaxy-detail-grid requested without crop-center/crop-size; using full image.")
+                grid_crop_center = None
+                grid_crop_size = None
+            else:
+                grid_crop_center = interpreted_crop_center
+                grid_crop_size = crop_size
+                _print_crop_interpretation(
+                    rgb_channel_data["red"].shape, crop_center, interpreted_crop_center, crop_size
+                )
             grid_path = _make_galaxy_detail_grid(
                 rgb_channel_data,
                 figures_dir / "galaxy_detail_grid.png",
-                crop_center=crop_center,
-                crop_size=crop_size,
+                crop_center=grid_crop_center,
+                crop_size=grid_crop_size,
                 zscale_contrast=zscale_contrast,
                 lower=lower,
                 upper=upper,
                 gamma=gamma,
                 stretch=stretch,
-                smooth_sigma=0.8 if smooth_sigma is None else smooth_sigma,
-                unsharp_sigma=2.0 if unsharp_sigma is None else unsharp_sigma,
-                unsharp_amount=0.6 if unsharp_amount is None else unsharp_amount,
-                background_neutralization=background_neutralization,
+                smooth_sigma=0.8 if effective_smooth_sigma is None else effective_smooth_sigma,
+                unsharp_sigma=2.0 if effective_unsharp_sigma is None else effective_unsharp_sigma,
+                unsharp_amount=0.6 if effective_unsharp_amount is None else effective_unsharp_amount,
+                background_neutralization=effective_background_neutralization,
                 background_percentile=background_percentile,
-                color_balance=color_balance,
+                color_balance=effective_color_balance,
             )
             written_paths.append(grid_path)
             _print_color_adjustment_log(
@@ -539,11 +746,11 @@ def make_demo_figures(
                 zscale_contrast=zscale_contrast,
                 lower=lower,
                 upper=upper,
-                background_neutralization=background_neutralization,
+                background_neutralization=effective_background_neutralization,
                 background_percentile=background_percentile,
-                color_balance=color_balance,
-                crop_center=crop_center,
-                crop_size=crop_size,
+                color_balance=effective_color_balance,
+                crop_center=grid_crop_center,
+                crop_size=grid_crop_size,
             )
 
     return written_paths
@@ -597,14 +804,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--background-neutralization",
         choices=["none", "subtract", "equalize"],
-        default="none",
-        help="Optional display RGB background neutralization (default: none).",
+        default=None,
+        help="Advanced override for display RGB background neutralization.",
     )
     parser.add_argument(
         "--color-balance",
         choices=["none", "background", "median", "max"],
-        default="none",
-        help="Optional display RGB channel balancing method (default: none).",
+        default=None,
+        help="Advanced override for display RGB channel balancing method.",
     )
     parser.add_argument(
         "--lower",
@@ -621,18 +828,23 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ds9like",
         action="store_true",
-        help="Write rgb_composite_ds9like.png with zscale limits and squared display scale.",
+        help="Write legacy rgb_composite_ds9like.png with zscale limits and squared display scale.",
+    )
+    parser.add_argument(
+        "--preset",
+        choices=["diagnostic", "natural", "deep_sky", "galaxy_detail"],
+        help="Recommended named visualization workflow to write a preset output PNG.",
     )
     parser.add_argument(
         "--rgb-limits",
         choices=["zscale", "percentile"],
-        default="zscale",
-        help="Display limits for named RGB outputs (default: zscale).",
+        default=None,
+        help="Advanced override for display limits used by preset or named RGB outputs.",
     )
     parser.add_argument(
         "--rgb-scale",
         choices=["linear", "squared", "cubed", "sqrt", "log", "asinh", "gamma"],
-        help="Display scale for named RGB outputs.",
+        help="Advanced override for display scale used by preset or named RGB outputs.",
     )
     parser.add_argument(
         "--zscale-contrast",
@@ -671,6 +883,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Square galaxy crop size in pixels.",
     )
     parser.add_argument(
+        "--crop-center-origin",
+        type=int,
+        choices=[0, 1],
+        default=0,
+        help="Coordinate origin for --crop-center X Y: 0 for Python zero-based, 1 for DS9 one-based.",
+    )
+    parser.add_argument(
         "--galaxy-detail-grid",
         action="store_true",
         help="Write galaxy_detail_grid.png with zscale crop scale/post-processing comparisons.",
@@ -694,6 +913,7 @@ def main(argv: list[str] | None = None) -> int:
             lower=args.lower,
             upper=args.upper,
             ds9like=args.ds9like,
+            preset=args.preset,
             rgb_limits=args.rgb_limits,
             rgb_scale=args.rgb_scale,
             zscale_contrast=args.zscale_contrast,
@@ -702,6 +922,7 @@ def main(argv: list[str] | None = None) -> int:
             unsharp_amount=args.unsharp_amount,
             crop_center=args.crop_center,
             crop_size=args.crop_size,
+            crop_center_origin=args.crop_center_origin,
             galaxy_detail_grid=args.galaxy_detail_grid,
             background_neutralization=args.background_neutralization,
             color_balance=args.color_balance,

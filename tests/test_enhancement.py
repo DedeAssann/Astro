@@ -170,8 +170,19 @@ def test_crop_image_supports_2d_and_rgb_and_clips_edges():
 
     assert crop_2d.shape == (2, 2)
     np.testing.assert_array_equal(crop_2d, image[:2, :2])
-    assert crop_rgb.shape == (4, 4, 3)
-    np.testing.assert_array_equal(crop_rgb[..., 0], image[0:4, 0:4])
+    assert crop_rgb.shape == (3, 3, 3)
+    np.testing.assert_array_equal(crop_rgb[..., 0], image[1:4, 1:4])
+
+
+
+def test_crop_image_uses_xy_center_as_col_row():
+    image = np.arange(100).reshape(10, 10)
+
+    crop = enhancement.crop_image(image, center=[7, 3], size=3)
+
+    assert crop.shape == (3, 3)
+    assert crop[1, 1] == image[3, 7]
+    np.testing.assert_array_equal(crop, image[2:5, 6:9])
 
 
 def test_make_display_rgb_returns_rgb_shape_and_range():

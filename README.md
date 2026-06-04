@@ -207,31 +207,26 @@ python scripts/make_demo_figures.py --object M83 --enhance-rgb \
   --background-percentile 10 --lower 0.5 --upper 99.5 --stretch 5.0 --gamma 1.0
 ```
 
-For DS9-style display previews of M83-like galaxies, use zscale display limits with a squared scale:
+For the current recommended full-frame M83 preview, use the `deep_sky` preset. It keeps the baseline `rgb_composite.png` and adds `rgb_composite_deep_sky.png` using zscale limits, a cubed display scale, background equalization, and background-based color balance:
 
 ```bash
-python scripts/make_demo_figures.py --object M83 --ds9like
+python scripts/make_demo_figures.py --object M83 --preset deep_sky
 ```
 
-This keeps the baseline `rgb_composite.png` and adds `rgb_composite_ds9like.png`. If the zscale+squared/cubed display background looks too violet or blue, add display-only color controls such as `--background-neutralization equalize --color-balance background` to make the RGB background percentiles more neutral while preserving the rest of the display stretch. The script prints per-channel background estimates and balance factors whenever these controls are active. You can also request named display-scale composites with `--rgb-limits zscale|percentile` and `--rgb-scale linear|squared|cubed|sqrt|log|asinh|gamma`; for example:
+Other named presets are available for repeatable workflows: `diagnostic` writes a zscale+linear unbalanced view, `natural` writes zscale+squared with neutralized background/color balance, and `galaxy_detail` writes a sharpened crop-oriented view. For galaxy detail, provide the crop center as DS9-style `X Y` image coordinates (x=column, y=row); by default these are Python zero-based coordinates. Use `--crop-center-origin 1` for one-based DS9 readouts. The CLI prints the requested X,Y center, interpreted NumPy row,col center, and clipped crop bounds. Recommended command:
 
 ```bash
-python scripts/make_demo_figures.py --object M83 \
-  --rgb-limits zscale --rgb-scale cubed --zscale-contrast 0.25 \
-  --background-neutralization equalize --color-balance background
+python scripts/make_demo_figures.py --object M83 --preset galaxy_detail \
+  --crop-center X Y --crop-size 450
 ```
 
-Galaxy-detail products crop the raw stacked/aligned red, green, and blue channels before display limits, display scales, Gaussian smoothing, or unsharp masking are applied. The crop center is provided as `X Y` display coordinates (column, row); bounds are clipped safely at image edges. Examples:
+Advanced overrides remain available for experimentation. Presets set defaults, and explicit options such as `--rgb-scale`, `--rgb-limits`, `--background-neutralization`, `--color-balance`, `--smooth-sigma`, `--unsharp-sigma`, or `--unsharp-amount` override the preset values. For example, this keeps the `deep_sky` background/color defaults but uses a squared scale:
 
 ```bash
-python scripts/make_demo_figures.py --object M83 --ds9like \
-  --crop-center 1024 1024 --crop-size 900 --unsharp-sigma 2.0 --unsharp-amount 0.6
-
-python scripts/make_demo_figures.py --object M83 --galaxy-detail-grid \
-  --crop-center 1024 1024 --crop-size 900
+python scripts/make_demo_figures.py --object M83 --preset deep_sky --rgb-scale squared
 ```
 
-Crop outputs are named from their processing settings, such as `rgb_crop_zscale_squared.png`, `rgb_crop_zscale_squared_unsharp.png`, or `rgb_crop_zscale_cubed_smooth.png`. The `--galaxy-detail-grid` option writes `galaxy_detail_grid.png` with six panels: zscale+linear, zscale+squared, zscale+cubed, zscale+squared+smoothing, zscale+squared+unsharp, and zscale+asinh+unsharp. If no crop center/size is supplied for the grid, the script prints a warning and uses the full RGB field.
+The older `--ds9like`, manual named-scale outputs, crop outputs, and `--galaxy-detail-grid` comparison output are still available as advanced visualization-only tools. Crop outputs never modify FITS data; crops are applied to raw stacked/aligned RGB channels before display transforms, smoothing, or unsharp masking.
 
 
 Alignment remains enabled by default and can still be controlled with the legacy top-level `align: true` or `align: false` flag. New configs can use an `alignment` block for diagnostics and tuning; when `alignment.enabled` is present, it overrides the legacy `align` value. The default settings preserve the previous behavior:
