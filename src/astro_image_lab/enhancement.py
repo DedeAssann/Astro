@@ -17,6 +17,22 @@ _COLOR_BALANCE_METHODS = {"none", "background", "median", "max"}
 _BALANCE_REGIONS = {"full", "crop"}
 _CONTRAST_REGIONS = {"full", "crop"}
 
+_RGB_CHANNEL_NAMES = ("red", "green", "blue")
+_RGB_CHANNEL_INDEX = {name: index for index, name in enumerate(_RGB_CHANNEL_NAMES)}
+
+
+def _normalize_selected_channels(selected_channels) -> tuple[str, ...]:
+    """Return validated RGB channel names in canonical red/green/blue order."""
+    if selected_channels is None:
+        return _RGB_CHANNEL_NAMES
+    requested = tuple(str(channel) for channel in selected_channels)
+    if not requested:
+        raise ValueError("selected_channels must contain at least one channel")
+    invalid = sorted(set(requested) - set(_RGB_CHANNEL_NAMES))
+    if invalid:
+        raise ValueError(f"selected_channels contains unsupported channel(s): {', '.join(invalid)}")
+    return tuple(channel for channel in _RGB_CHANNEL_NAMES if channel in requested)
+
 
 def _finite_values(image: np.ndarray) -> np.ndarray:
     """Return the finite values in ``image`` as a one-dimensional float array."""
@@ -613,6 +629,203 @@ def make_display_rgb(
         channel_scales=channel_scales,
     )
     rgb = apply_display_scale(rgb, scale=scale, gamma=gamma, stretch=stretch)
+    return np.clip(rgb, 0.0, 1.0)
+
+
+def _partial_rgb_color_adjustments(
+    rgb,
+    selected_channels,
+    percentile=10,
+    background_neutralization="none",
+    color_balance="none",
+    color_balance_strength=1.0,
+    channel_scales=(1.0, 1.0, 1.0),
+    reference_rgb=None,
+) -> np.ndarray:
+    """Apply color controls to selected RGB planes while leaving missing planes zero."""
+    if background_neutralization not in _BACKGROUND_NEUTRALIZATION_MODES:
+        raise ValueError(
+            f"background_neutralization must be one of {sorted(_BACKGROUND_NEUTRALIZATION_MODES)}"
+        )
+    if color_balance not in _COLOR_BALANCE_METHODS:
+        raise ValueError(f"method must be one of {sorted(_COLOR_BALANCE_METHODS)}")
+
+    selected = _normalize_selected_channels(selected_channels)
+    selected_indices = [_RGB_CHANNEL_INDEX[channel] for channel in selected]
+    target_rgb = _as_rgb_array(rgb)
+    reference_rgb = target_rgb if reference_rgb is None else _as_rgb_array(reference_rgb)
+    adjusted = target_rgb.copy()
+
+    backgrounds = np.array(
+        [estimate_channel_background(reference_rgb[..., index], percentile) for index in selected_indices],
+        dtype=float,
+    )
+    if background_neutralization == "subtract":
+        for index, background in zip(selected_indices, backgrounds):
+            adjusted[..., index] = adjusted[..., index] - background
+    elif background_neutralization == "equalize":
+        target = float(np.median(backgrounds[np.isfinite(backgrounds)]))
+        for index, background in zip(selected_indices, backgrounds):
+            adjusted[..., index] = adjusted[..., index] + (target - background)
+    adjusted = np.clip(adjusted, 0.0, 1.0)
+
+    selected_reference = reference_rgb[..., selected_indices]
+    if background_neutralization != "none":
+        selected_reference = selected_reference.copy()
+        if background_neutralization == "subtract":
+            selected_reference = selected_reference - backgrounds.reshape(1, 1, -1)
+        else:
+            target = float(np.median(backgrounds[np.isfinite(backgrounds)]))
+            selected_reference = selected_reference + (target - backgrounds).reshape(1, 1, -1)
+        selected_reference = np.clip(selected_reference, 0.0, 1.0)
+
+    if color_balance == "none":
+        selected_factors = np.ones(len(selected_indices), dtype=float)
+    else:
+        stats = np.array(
+            [
+                _positive_channel_stat(selected_reference[..., channel], color_balance, percentile)
+                for channel in range(len(selected_indices))
+            ],
+            dtype=float,
+        )
+        valid_stats = stats[np.isfinite(stats) & (stats > 0)]
+        selected_factors = np.ones(len(selected_indices), dtype=float)
+        if valid_stats.size:
+            target = float(np.median(valid_stats))
+            valid_mask = np.isfinite(stats) & (stats > 0)
+            selected_factors[valid_mask] = target / stats[valid_mask]
+    selected_effective = 1.0 + (selected_factors - 1.0) * _validate_color_balance_strength(
+        color_balance_strength
+    )
+    manual_scales = _validate_channel_scales(channel_scales)
+    for factor, index in zip(selected_effective, selected_indices):
+        adjusted[..., index] = adjusted[..., index] * factor * manual_scales[index]
+
+    missing_indices = sorted(set(range(3)) - set(selected_indices))
+    for index in missing_indices:
+        adjusted[..., index] = 0.0
+    return np.clip(adjusted, 0.0, 1.0)
+
+
+def make_partial_rgb(
+    channel_data,
+    selected_channels,
+    limits="zscale",
+    scale="squared",
+    zscale_contrast=0.25,
+    lower=0.5,
+    upper=99.5,
+    gamma=1.0,
+    stretch=5.0,
+    channel_mode="per-channel",
+    crop_center=None,
+    crop_size=None,
+    smooth_sigma=None,
+    unsharp_sigma=None,
+    unsharp_amount=None,
+    masked_unsharp=False,
+    mask_percentile=65,
+    mask_softness=1.0,
+    background_neutralization="none",
+    background_percentile=10,
+    color_balance="none",
+    color_balance_strength=1.0,
+    channel_scales=(1.0, 1.0, 1.0),
+    contrast_region="full",
+    balance_region="full",
+) -> np.ndarray:
+    """Create a display RGB preview from one, two, or three selected channels.
+
+    Missing RGB planes are filled with zeros. Selected channels use the same
+    display-limit, stretch, crop, color-control, and optional convolution logic
+    as full RGB previews; automatic background/color balance is estimated only
+    across selected channels.
+    """
+    selected = _normalize_selected_channels(selected_channels)
+    missing = [channel for channel in selected if channel not in channel_data]
+    if missing:
+        raise ValueError(f"channel_data missing selected channel(s): {', '.join(missing)}")
+    if contrast_region not in _CONTRAST_REGIONS:
+        raise ValueError(f"contrast_region must be one of {sorted(_CONTRAST_REGIONS)}")
+    if balance_region not in _BALANCE_REGIONS:
+        raise ValueError(f"balance_region must be one of {sorted(_BALANCE_REGIONS)}")
+    if channel_mode not in _CHANNEL_MODES:
+        raise ValueError(f"channel_mode must be one of {sorted(_CHANNEL_MODES)}")
+
+    selected_arrays = {channel: np.asarray(channel_data[channel], dtype=float) for channel in selected}
+    first_shape = next(iter(selected_arrays.values())).shape
+    if any(array.shape != first_shape for array in selected_arrays.values()):
+        raise ValueError("selected channel arrays must have matching shapes")
+
+    has_crop = crop_center is not None and crop_size is not None
+    cropped_arrays = {
+        channel: crop_image(array, center=crop_center, size=crop_size)
+        for channel, array in selected_arrays.items()
+    }
+    target_arrays = cropped_arrays if has_crop else selected_arrays
+    contrast_arrays = cropped_arrays if has_crop and contrast_region == "crop" else selected_arrays
+
+    selected_contrast_channels = [contrast_arrays[channel] for channel in selected]
+    selected_target_channels = [target_arrays[channel] for channel in selected]
+    target_limit_pairs = _channel_limit_pairs(
+        selected_contrast_channels, limits, lower, upper, zscale_contrast, channel_mode
+    )
+
+    target_shape = selected_target_channels[0].shape
+    target_linear_rgb = np.zeros((*target_shape, 3), dtype=float)
+    for channel, array, limit_pair in zip(selected, selected_target_channels, target_limit_pairs):
+        index = _RGB_CHANNEL_INDEX[channel]
+        target_linear_rgb[..., index] = scale_to_limits(array, *limit_pair)
+
+    if balance_region == "crop" or not has_crop:
+        reference_rgb = target_linear_rgb
+    else:
+        selected_reference_channels = [selected_arrays[channel] for channel in selected]
+        reference_limit_pairs = _channel_limit_pairs(
+            selected_reference_channels, limits, lower, upper, zscale_contrast, channel_mode
+        )
+        reference_shape = selected_reference_channels[0].shape
+        reference_rgb = np.zeros((*reference_shape, 3), dtype=float)
+        for channel, array, limit_pair in zip(selected, selected_reference_channels, reference_limit_pairs):
+            index = _RGB_CHANNEL_INDEX[channel]
+            reference_rgb[..., index] = scale_to_limits(array, *limit_pair)
+
+    rgb = _partial_rgb_color_adjustments(
+        target_linear_rgb,
+        selected,
+        percentile=background_percentile,
+        background_neutralization=background_neutralization,
+        color_balance=color_balance,
+        color_balance_strength=color_balance_strength,
+        channel_scales=channel_scales,
+        reference_rgb=reference_rgb,
+    )
+    rgb = apply_display_scale(rgb, scale=scale, gamma=gamma, stretch=stretch)
+
+    has_unsharp = unsharp_sigma is not None or unsharp_amount is not None
+    if smooth_sigma is not None and (has_unsharp or masked_unsharp):
+        raise ValueError("smooth and sharpening convolution cannot be applied simultaneously")
+    if smooth_sigma is not None:
+        rgb = np.clip(gaussian_smooth(rgb, sigma=smooth_sigma), 0.0, 1.0)
+    if masked_unsharp:
+        sigma = 1.8 if unsharp_sigma is None else unsharp_sigma
+        amount = 0.35 if unsharp_amount is None else unsharp_amount
+        rgb = masked_unsharp_mask(
+            rgb,
+            sigma=sigma,
+            amount=amount,
+            mask_percentile=mask_percentile,
+            mask_softness=mask_softness,
+        )
+    elif has_unsharp:
+        sigma = 1.8 if unsharp_sigma is None else unsharp_sigma
+        amount = 0.35 if unsharp_amount is None else unsharp_amount
+        rgb = unsharp_mask(rgb, sigma=sigma, amount=amount)
+
+    missing_indices = sorted(set(range(3)) - {_RGB_CHANNEL_INDEX[channel] for channel in selected})
+    for index in missing_indices:
+        rgb[..., index] = 0.0
     return np.clip(rgb, 0.0, 1.0)
 
 

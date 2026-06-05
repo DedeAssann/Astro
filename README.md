@@ -276,7 +276,19 @@ python scripts/make_demo_figures.py --object M83 --preset galaxy_detail \
   --crop-center 2120 2060 --crop-size 1400 --convolution masked_unsharp
 ```
 
-Primary visualization controls are `--object`, `--data-root`, `--filters`, `--preset diagnostic|natural|deep_sky|galaxy_detail`, `--crop-center X Y`, `--crop-center-origin 0|1`, `--crop-size SIZE`, `--convolution none|smooth|unsharp|masked_unsharp`, `--mask-percentile`, `--mask-softness`, and the histogram controls `--hist-lower-percentile`, `--hist-upper-percentile`, and `--hist-bins`. Crop centers are supplied as display-style `X Y` coordinates (x=column, y=row); the code converts those to NumPy row/column indexing and prints the interpreted center and clipped crop bounds.
+Primary visualization controls are `--object`, `--data-root`, `--filters`, `--preset diagnostic|natural|deep_sky|galaxy_detail`, `--channels red green blue`, `--crop-center X Y`, `--crop-center-origin 0|1`, `--crop-size SIZE`, `--convolution none|smooth|unsharp|masked_unsharp`, `--mask-percentile`, `--mask-softness`, and the histogram controls `--hist-lower-percentile`, `--hist-upper-percentile`, and `--hist-bins`. Crop centers are supplied as display-style `X Y` coordinates (x=column, y=row); the code converts those to NumPy row/column indexing and prints the interpreted center and clipped crop bounds.
+
+Use `--channels` when you want a color composite from only one or two available channels. Missing RGB planes are filled with zeros, so `--channels red` writes the red data into the red plane only, `--channels blue` writes the blue data into the blue plane only, and `--channels red blue` leaves green black. Requested channels still use the active preset/display limits, display scale, crop-local contrast, selected-channel background/color balance, and optional convolution settings. If a requested channel is not present in the stacked outputs, the CLI raises a clear error instead of requiring the other RGB channels. Example commands:
+
+```bash
+python scripts/make_demo_figures.py --object M83 --preset deep_sky --channels red
+python scripts/make_demo_figures.py --object M83 --preset deep_sky --channels blue
+python scripts/make_demo_figures.py --object M83 --preset deep_sky --channels red blue
+python scripts/make_demo_figures.py --object M83 --preset galaxy_detail --channels red blue \
+  --crop-center 2120 2060 --crop-size 1400
+```
+
+Selected-channel outputs are named by channel selection: `rgb_red_only.png`, `rgb_blue_only.png`, `rgb_red_blue.png`, or with presets such as `rgb_red_only_deep_sky.png` and `rgb_crop_red_blue_galaxy_detail.png`.
 
 Preset behavior is:
 

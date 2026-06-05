@@ -552,3 +552,54 @@ def test_make_demo_figures_forwards_histogram_cli_options(tmp_path, monkeypatch)
             "output_path": data_root / "M83" / "figures" / "histogram_red.png",
         }
     ]
+
+
+def test_channels_red_only_writes_partial_preset_output_without_requiring_green_blue(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("red",))
+    _mock_load_fits(monkeypatch)
+
+    written = make_demo_figures.make_demo_figures(
+        "M83",
+        data_root=data_root,
+        preset="deep_sky",
+        channels=["red"],
+    )
+
+    output_path = data_root / "M83" / "figures" / "rgb_red_only_deep_sky.png"
+    assert output_path in written
+    assert output_path.is_file()
+    assert data_root / "M83" / "figures" / "rgb_composite.png" not in written
+
+
+def test_channels_red_blue_crop_writes_partial_crop_preset_output(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("red", "blue"))
+    _mock_load_fits(monkeypatch)
+
+    written = make_demo_figures.make_demo_figures(
+        "M83",
+        data_root=data_root,
+        preset="galaxy_detail",
+        channels=["red", "blue"],
+        crop_center=[2, 2],
+        crop_size=3,
+    )
+
+    output_path = data_root / "M83" / "figures" / "rgb_crop_red_blue_galaxy_detail.png"
+    assert output_path in written
+    assert output_path.is_file()
+
+
+def test_channels_missing_requested_channel_raises_clear_error(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("red",))
+    _mock_load_fits(monkeypatch)
+
+    with pytest.raises(make_demo_figures.DemoFigureError, match="Requested channel"):
+        make_demo_figures.make_demo_figures(
+            "M83",
+            data_root=data_root,
+            preset="deep_sky",
+            channels=["blue"],
+        )

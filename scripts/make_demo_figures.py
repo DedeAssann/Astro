@@ -336,6 +336,49 @@ def _crop_method_suffix(convolution, smooth_sigma, unsharp_sigma, unsharp_amount
     return ""
 
 
+def _normalize_requested_channels(channels) -> tuple[str, ...] | None:
+    """Return requested channels in canonical RGB order, or None for full RGB behavior."""
+    if channels is None:
+        return None
+    if not channels:
+        raise DemoFigureError("--channels must include at least one channel")
+    allowed = ("red", "green", "blue")
+    invalid = sorted(set(channels) - set(allowed))
+    if invalid:
+        raise DemoFigureError(f"Unsupported channel(s): {', '.join(invalid)}")
+    return tuple(channel for channel in allowed if channel in channels)
+
+
+def _channel_selection_suffix(channels: tuple[str, ...]) -> str:
+    """Return filename suffix for a one- or two-channel RGB color composite."""
+    if len(channels) == 1:
+        return f"{channels[0]}_only"
+    return "_".join(channels)
+
+
+def _partial_output_name(channels: tuple[str, ...], preset: str | None, crop: bool) -> str:
+    """Return output filename for a selected-channel color composite."""
+    prefix = "rgb_crop" if crop else "rgb"
+    suffix = _channel_selection_suffix(channels)
+    if preset is not None:
+        return f"{prefix}_{suffix}_{preset}.png"
+    return f"{prefix}_{suffix}.png"
+
+
+def _resolve_selected_channel_files(
+    stacked_dir: Path, stacked_files: dict[str, Path], selected_channels: tuple[str, ...]
+) -> dict[str, Path]:
+    """Resolve selected channel paths, preferring aligned channel products when present."""
+    missing = [channel for channel in selected_channels if channel not in stacked_files]
+    if missing:
+        raise DemoFigureError(f"Requested channel(s) not found in stacked outputs: {', '.join(missing)}")
+    selected_files = {}
+    for channel in selected_channels:
+        aligned_path = _aligned_channel_path(stacked_dir, channel)
+        selected_files[channel] = aligned_path if aligned_path.exists() else stacked_files[channel]
+    return selected_files
+
+
 def _print_crop_interpretation(image_shape, requested_center, interpreted_center, crop_size) -> None:
     """Log how CLI x/y crop coordinates map to NumPy row/column bounds."""
     if requested_center is None or interpreted_center is None or crop_size is None:
@@ -572,6 +615,7 @@ def make_demo_figures(
     convolution: str | None = None,
     mask_percentile: float | None = None,
     mask_softness: float | None = None,
+    channels: list[str] | tuple[str, ...] | None = None,
 ) -> list[Path]:
     """Create PNG demo figures from stacked FITS files for one object.
 
@@ -617,6 +661,7 @@ def make_demo_figures(
     effective_unsharp_sigma = display_options["unsharp_sigma"]
     effective_unsharp_amount = display_options["unsharp_amount"]
     interpreted_crop_center = _interpret_crop_center(crop_center, crop_center_origin)
+    selected_channels = _normalize_requested_channels(channels)
     if effective_contrast_region == "crop" and (interpreted_crop_center is None or crop_size is None):
         print("Warning: contrast_region=crop requested without crop-center/crop-size; falling back to full.")
         effective_contrast_region = "full"
@@ -648,7 +693,128 @@ def make_demo_figures(
         written_paths.append(histogram_path)
         print(histogram_path)
 
-    if {"red", "green", "blue"}.issubset(stacked_files):
+    if selected_channels is not None:
+        selected_files = _resolve_selected_channel_files(stacked_dir, stacked_files, selected_channels)
+        rgb_channel_data = {}
+        for filter_name in selected_channels:
+            rgb_channel_data[filter_name], _header = load_fits(selected_files[filter_name])
+        source_summary = ", ".join(
+            f"{filter_name}={selected_files[filter_name]}" for filter_name in selected_channels
+        )
+        print(f"Partial RGB composite sources: {source_summary}")
+        partial_scale = effective_scale or "linear"
+        partial_rgb = enhancement.make_partial_rgb(
+            rgb_channel_data,
+            selected_channels,
+            limits=effective_limits,
+            scale=partial_scale,
+            zscale_contrast=zscale_contrast,
+            lower=lower,
+            upper=upper,
+            gamma=gamma,
+            stretch=stretch,
+            smooth_sigma=effective_smooth_sigma,
+            unsharp_sigma=effective_unsharp_sigma,
+            unsharp_amount=effective_unsharp_amount,
+            masked_unsharp=effective_masked_unsharp,
+            mask_percentile=effective_mask_percentile,
+            mask_softness=effective_mask_softness,
+            background_neutralization=effective_background_neutralization,
+            background_percentile=background_percentile,
+            color_balance=effective_color_balance,
+            color_balance_strength=effective_color_balance_strength,
+            channel_scales=effective_channel_scales,
+            contrast_region=effective_contrast_region,
+            balance_region=effective_balance_region,
+        )
+        _save_rgb(
+            figures_dir / _partial_output_name(selected_channels, preset, crop=False),
+            partial_rgb,
+            written_paths,
+            "partial-rgb" if preset is None else f"partial-rgb:{preset}",
+            channels=selected_channels,
+            limits=effective_limits,
+            scale=partial_scale,
+            zscale_contrast=zscale_contrast,
+            background_neutralization=effective_background_neutralization,
+            background_percentile=background_percentile,
+            color_balance=effective_color_balance,
+            color_balance_strength=effective_color_balance_strength,
+            channel_scales=effective_channel_scales,
+            balance_region=effective_balance_region,
+        )
+
+        crop_requested = interpreted_crop_center is not None or crop_size is not None or preset == "galaxy_detail"
+        if crop_requested:
+            if interpreted_crop_center is None or crop_size is None:
+                if preset == "galaxy_detail":
+                    print(
+                        "Warning: --preset galaxy_detail requested without crop-center/crop-size; "
+                        "using full image, but a crop is recommended."
+                    )
+                    crop_center_for_output = None
+                    crop_size_for_output = None
+                else:
+                    print(
+                        "Warning: both --crop-center and --crop-size are required for crop "
+                        "outputs; no crop output was written."
+                    )
+                    crop_center_for_output = None
+                    crop_size_for_output = None
+            else:
+                crop_center_for_output = interpreted_crop_center
+                crop_size_for_output = crop_size
+                _print_crop_interpretation(
+                    next(iter(rgb_channel_data.values())).shape, crop_center, interpreted_crop_center, crop_size
+                )
+            if preset == "galaxy_detail" or (
+                crop_center_for_output is not None and crop_size_for_output is not None
+            ):
+                crop_rgb = enhancement.make_partial_rgb(
+                    rgb_channel_data,
+                    selected_channels,
+                    limits=effective_limits,
+                    scale=partial_scale,
+                    zscale_contrast=zscale_contrast,
+                    lower=lower,
+                    upper=upper,
+                    gamma=gamma,
+                    stretch=stretch,
+                    crop_center=crop_center_for_output,
+                    crop_size=crop_size_for_output,
+                    smooth_sigma=effective_smooth_sigma,
+                    unsharp_sigma=effective_unsharp_sigma,
+                    unsharp_amount=effective_unsharp_amount,
+                    masked_unsharp=effective_masked_unsharp,
+                    mask_percentile=effective_mask_percentile,
+                    mask_softness=effective_mask_softness,
+                    background_neutralization=effective_background_neutralization,
+                    background_percentile=background_percentile,
+                    color_balance=effective_color_balance,
+                    color_balance_strength=effective_color_balance_strength,
+                    channel_scales=effective_channel_scales,
+                    contrast_region=effective_contrast_region,
+                    balance_region=effective_balance_region,
+                )
+                _save_rgb(
+                    figures_dir / _partial_output_name(selected_channels, preset, crop=True),
+                    crop_rgb,
+                    written_paths,
+                    "partial-crop" if preset is None else f"partial-crop:{preset}",
+                    channels=selected_channels,
+                    limits=effective_limits,
+                    scale=partial_scale,
+                    crop_center=crop_center_for_output,
+                    crop_size=crop_size_for_output,
+                    background_neutralization=effective_background_neutralization,
+                    background_percentile=background_percentile,
+                    color_balance=effective_color_balance,
+                    color_balance_strength=effective_color_balance_strength,
+                    channel_scales=effective_channel_scales,
+                    balance_region=effective_balance_region,
+                )
+
+    elif {"red", "green", "blue"}.issubset(stacked_files):
         rgb_files = _resolve_rgb_channel_files(stacked_dir, stacked_files)
         rgb_channel_data = {}
         for filter_name in ("red", "green", "blue"):
@@ -1029,6 +1195,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional filter names to render, for example blue green red.",
     )
     parser.add_argument(
+        "--channels",
+        nargs="+",
+        choices=["red", "green", "blue"],
+        help="Optional RGB color-composite channels to render, for example red or red blue.",
+    )
+    parser.add_argument(
         "--enhance-rgb",
         action="store_true",
         help="Also write display-enhanced rgb_composite_enhanced.png when RGB channels exist.",
@@ -1248,6 +1420,7 @@ def main(argv: list[str] | None = None) -> int:
             convolution=args.convolution,
             mask_percentile=args.mask_percentile,
             mask_softness=args.mask_softness,
+            channels=args.channels,
         )
     except DemoFigureError as exc:
         parser.error(str(exc))
