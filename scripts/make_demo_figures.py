@@ -873,14 +873,14 @@ def make_demo_figures(
                     effective_unsharp_sigma,
                     effective_unsharp_amount,
                 )
-                if (
-                    preset == "galaxy_detail"
-                    and crop_center_for_output is None
-                    and effective_convolution == "masked_unsharp"
-                ):
-                    output_name = "rgb_composite_galaxy_detail.png"
-                elif preset == "galaxy_detail" and crop_center_for_output is None:
-                    output_name = f"rgb_composite_galaxy_detail{suffix}.png"
+                explicit_masked_unsharp = convolution == "masked_unsharp"
+                if preset == "galaxy_detail" and crop_center_for_output is None:
+                    if explicit_masked_unsharp:
+                        output_name = "rgb_composite_galaxy_detail_masked_unsharp.png"
+                    else:
+                        output_name = "rgb_composite_galaxy_detail.png"
+                elif preset == "galaxy_detail" and explicit_masked_unsharp:
+                    output_name = "rgb_crop_galaxy_detail_masked_unsharp.png"
                 elif preset == "galaxy_detail" and effective_convolution == "masked_unsharp":
                     output_name = "rgb_crop_galaxy_detail.png"
                 elif preset == "galaxy_detail":

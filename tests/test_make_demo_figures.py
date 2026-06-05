@@ -437,6 +437,25 @@ def test_galaxy_detail_unsharp_crop_output_is_written(tmp_path, monkeypatch):
     assert crop_path.is_file()
 
 
+
+def test_galaxy_detail_explicit_masked_unsharp_crop_output_is_written(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("blue", "green", "red"))
+    _mock_load_fits(monkeypatch)
+
+    written = make_demo_figures.make_demo_figures(
+        "M83",
+        data_root=data_root,
+        preset="galaxy_detail",
+        crop_center=[2, 2],
+        crop_size=3,
+        convolution="masked_unsharp",
+    )
+
+    crop_path = data_root / "M83" / "figures" / "rgb_crop_galaxy_detail_masked_unsharp.png"
+    assert crop_path in written
+    assert crop_path.is_file()
+
 def test_convolution_modes_forward_to_enhancement(monkeypatch, tmp_path):
     data_root = tmp_path / "data"
     _touch_stacked(data_root, filters=("blue", "green", "red"))

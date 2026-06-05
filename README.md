@@ -37,7 +37,8 @@ The scientific goal of V1 is to provide a transparent teaching and portfolio pip
 ├── notebooks/               # Exploratory notebooks
 ├── scripts/                 # Command-line entry points
 │   ├── run_calibration.py
-│   └── make_demo_figures.py
+│   ├── make_demo_figures.py
+│   └── generate_object_report.py
 ├── src/astro_image_lab/     # Reusable package modules
 │   ├── calibration.py
 │   ├── diagnostics.py
@@ -82,6 +83,15 @@ Create one YAML config per observed object. The compact example `configs/m83_exa
 
 ```bash
 python scripts/run_calibration.py --config configs/m83_example.yaml
+```
+
+Recommended V2 review workflow after calibration:
+
+```bash
+python scripts/make_demo_figures.py --object M83 --preset deep_sky
+python scripts/make_demo_figures.py --object M83 --preset galaxy_detail --crop-center 2120 2060 --crop-size 1400
+python scripts/make_demo_figures.py --object M83 --preset galaxy_detail --crop-center 2120 2060 --crop-size 1400 --convolution masked_unsharp
+python scripts/generate_object_report.py --object M83
 ```
 
 Compact config mode looks like this:
@@ -211,9 +221,12 @@ python scripts/make_demo_figures.py --object M83 --preset galaxy_detail \
   --crop-center 2120 2060 --crop-size 1400
 ```
 
-The `galaxy_detail` preset uses masked unsharp masking by default so bright arms and core structure sharpen without boosting dark-background noise. Raw unsharp masking remains available explicitly when you want to compare against the unmasked method:
+The `galaxy_detail` preset uses masked unsharp masking by default so bright arms and core structure sharpen without boosting dark-background noise. Pass `--convolution masked_unsharp` explicitly when you want a method-labeled `rgb_crop_galaxy_detail_masked_unsharp.png`; raw unsharp masking remains available when you want to compare against the unmasked method:
 
 ```bash
+python scripts/make_demo_figures.py --object M83 --preset galaxy_detail \
+  --crop-center 2120 2060 --crop-size 1400 --convolution masked_unsharp
+
 python scripts/make_demo_figures.py --object M83 --preset galaxy_detail \
   --crop-center 2120 2060 --crop-size 1400 --convolution unsharp
 ```
@@ -230,6 +243,16 @@ Preset behavior is:
 All RGB preset, crop, smoothing, unsharp, and masked-unsharp outputs are PNG-only visualization products. They load calibrated/stacked FITS arrays into memory but do not modify calibrated, stacked, or aligned FITS science data.
 
 Advanced overrides remain available but are intentionally secondary to the presets: `--rgb-limits zscale|percentile`, `--rgb-scale linear|squared|cubed|sqrt|log|asinh|gamma`, `--background-neutralization none|subtract|equalize`, `--background-percentile`, `--color-balance none|background|median|max`, `--color-balance-strength`, `--channel-scales R G B`, `--smooth-sigma`, `--unsharp-sigma`, `--unsharp-amount`, `--mask-percentile`, `--mask-softness`, `--zscale-contrast`, `--lower`, `--upper`, `--gamma`, `--stretch`, `--contrast-region full|crop`, and `--balance-region full|crop`. The older `--ds9like`, manual named-scale outputs, and `--galaxy-detail-grid` comparison output remain available as explicit advanced/debug tools; large comparison grids are not generated unless requested.
+
+Generate a compact object-level Markdown report after running calibration and visualization:
+
+```bash
+python scripts/generate_object_report.py --object M83
+python scripts/generate_object_report.py --object M83 --data-root data
+```
+
+The report is written to `data/<OBJECT_NAME>/analysis/report.md` and summarizes the object layout, stacked and aligned FITS products, key visualization PNGs, calibration QC warnings/statistics, alignment status counts, diagnostic plots, and suggested manual checks. The optional summary-sheet concept is tracked as a TODO; the current implementation intentionally keeps reporting portable and Markdown-only.
+
 
 
 Alignment remains enabled by default and can still be controlled with the legacy top-level `align: true` or `align: false` flag. New configs can use an `alignment` block for diagnostics and tuning; when `alignment.enabled` is present, it overrides the legacy `align` value. The default settings preserve the previous behavior:
