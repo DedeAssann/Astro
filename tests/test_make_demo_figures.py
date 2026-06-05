@@ -346,16 +346,17 @@ def test_visualization_presets_map_to_expected_parameters():
     assert deep_sky["background_neutralization"] == "equalize"
     assert deep_sky["color_balance"] == "background"
     galaxy_detail = make_demo_figures._resolve_display_options("galaxy_detail")
+    assert galaxy_detail["scale"] == "cubed"
     assert galaxy_detail["contrast_region"] == "crop"
     assert galaxy_detail["balance_region"] == "full"
-    assert galaxy_detail["convolution"] == "masked_unsharp"
-    assert galaxy_detail["masked_unsharp"] is True
+    assert galaxy_detail["convolution"] == "none"
+    assert galaxy_detail["masked_unsharp"] is False
     assert galaxy_detail["mask_percentile"] == pytest.approx(65)
     assert galaxy_detail["mask_softness"] == pytest.approx(1.0)
     assert galaxy_detail["color_balance_strength"] == pytest.approx(0.35)
     assert galaxy_detail["channel_scales"] == (1.0, 1.0, 1.0)
-    assert galaxy_detail["unsharp_sigma"] == pytest.approx(1.8)
-    assert galaxy_detail["unsharp_amount"] == pytest.approx(0.35)
+    assert galaxy_detail["unsharp_sigma"] is None
+    assert galaxy_detail["unsharp_amount"] is None
 
 
 def test_explicit_cli_values_override_preset_values():
@@ -411,8 +412,11 @@ def test_galaxy_detail_preset_crop_output_is_written(tmp_path, monkeypatch, caps
     )
 
     crop_path = data_root / "M83" / "figures" / "rgb_crop_galaxy_detail.png"
+    masked_path = data_root / "M83" / "figures" / "rgb_crop_galaxy_detail_masked_unsharp.png"
     assert crop_path in written
     assert crop_path.is_file()
+    assert masked_path not in written
+    assert not masked_path.exists()
     stdout = capsys.readouterr().out
     assert "requested X,Y=(3, 2)" in stdout
     assert "interpreted NumPy row,col=(1.0, 2.0)" in stdout
@@ -436,6 +440,25 @@ def test_galaxy_detail_unsharp_crop_output_is_written(tmp_path, monkeypatch):
     assert crop_path in written
     assert crop_path.is_file()
 
+
+
+def test_galaxy_detail_explicit_masked_unsharp_crop_output_is_written(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("blue", "green", "red"))
+    _mock_load_fits(monkeypatch)
+
+    written = make_demo_figures.make_demo_figures(
+        "M83",
+        data_root=data_root,
+        preset="galaxy_detail",
+        crop_center=[2, 2],
+        crop_size=3,
+        convolution="masked_unsharp",
+    )
+
+    crop_path = data_root / "M83" / "figures" / "rgb_crop_galaxy_detail_masked_unsharp.png"
+    assert crop_path in written
+    assert crop_path.is_file()
 
 def test_convolution_modes_forward_to_enhancement(monkeypatch, tmp_path):
     data_root = tmp_path / "data"
@@ -529,3 +552,54 @@ def test_make_demo_figures_forwards_histogram_cli_options(tmp_path, monkeypatch)
             "output_path": data_root / "M83" / "figures" / "histogram_red.png",
         }
     ]
+
+
+def test_channels_red_only_writes_partial_preset_output_without_requiring_green_blue(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("red",))
+    _mock_load_fits(monkeypatch)
+
+    written = make_demo_figures.make_demo_figures(
+        "M83",
+        data_root=data_root,
+        preset="deep_sky",
+        channels=["red"],
+    )
+
+    output_path = data_root / "M83" / "figures" / "rgb_red_only_deep_sky.png"
+    assert output_path in written
+    assert output_path.is_file()
+    assert data_root / "M83" / "figures" / "rgb_composite.png" not in written
+
+
+def test_channels_red_blue_crop_writes_partial_crop_preset_output(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("red", "blue"))
+    _mock_load_fits(monkeypatch)
+
+    written = make_demo_figures.make_demo_figures(
+        "M83",
+        data_root=data_root,
+        preset="galaxy_detail",
+        channels=["red", "blue"],
+        crop_center=[2, 2],
+        crop_size=3,
+    )
+
+    output_path = data_root / "M83" / "figures" / "rgb_crop_red_blue_galaxy_detail.png"
+    assert output_path in written
+    assert output_path.is_file()
+
+
+def test_channels_missing_requested_channel_raises_clear_error(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    _touch_stacked(data_root, filters=("red",))
+    _mock_load_fits(monkeypatch)
+
+    with pytest.raises(make_demo_figures.DemoFigureError, match="Requested channel"):
+        make_demo_figures.make_demo_figures(
+            "M83",
+            data_root=data_root,
+            preset="deep_sky",
+            channels=["blue"],
+        )

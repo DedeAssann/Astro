@@ -37,7 +37,8 @@ The scientific goal of V1 is to provide a transparent teaching and portfolio pip
 ├── notebooks/               # Exploratory notebooks
 ├── scripts/                 # Command-line entry points
 │   ├── run_calibration.py
-│   └── make_demo_figures.py
+│   ├── make_demo_figures.py
+│   └── generate_object_report.py
 ├── src/astro_image_lab/     # Reusable package modules
 │   ├── calibration.py
 │   ├── diagnostics.py
@@ -82,6 +83,15 @@ Create one YAML config per observed object. The compact example `configs/m83_exa
 
 ```bash
 python scripts/run_calibration.py --config configs/m83_example.yaml
+```
+
+Recommended V2 review workflow after calibration:
+
+```bash
+python scripts/make_demo_figures.py --object M83 --preset deep_sky
+python scripts/make_demo_figures.py --object M83 --preset galaxy_detail --crop-center 2120 2060 --crop-size 1400
+python scripts/make_demo_figures.py --object M83 --preset galaxy_detail --crop-center 2120 2060 --crop-size 1400 --convolution masked_unsharp
+python scripts/generate_object_report.py --object M83
 ```
 
 Compact config mode looks like this:
@@ -135,7 +145,7 @@ data/<OBJECT_NAME>/
 └── analysis/
 ```
 
-The CLI accepts `.fits`, `.fit`, and `.fts` filenames case-insensitively, sorts discovered lists for reproducibility, and creates output directories when needed. If `calibration_qc.enabled` or `diagnostics.enabled` is true, the pipeline also writes diagnostic products under `data/<OBJECT_NAME>/analysis/diagnostics/`. For each configured science filter, it writes:
+The CLI accepts `.fits`, `.fit`, and `.fts` filenames case-insensitively, sorts discovered lists for reproducibility, and creates output directories when needed. The default `input_mode: raw` preserves the original behavior: bias, flat, and raw science frames are discovered from the layout above, calibrated, optionally aligned, and stacked. If `calibration_qc.enabled` or `diagnostics.enabled` is true, the raw-mode pipeline also writes diagnostic products under `data/<OBJECT_NAME>/analysis/diagnostics/`. For each configured science filter, raw mode writes:
 
 - `master_bias.fits` to `data/<OBJECT_NAME>/calibrated/`
 - `master_flat_<filter>.fits` to `data/<OBJECT_NAME>/calibrated/`
@@ -145,6 +155,54 @@ The CLI accepts `.fits`, `.fit`, and `.fts` filenames case-insensitively, sorts 
 - When calibration QC is enabled, `analysis/diagnostics/bias_frame_statistics.csv`, `flat_frame_statistics.csv`, `calibration_qc_warnings.txt`, `bias_frame_mean_median_distribution.png`, and one `flat_<filter>_linearity_curve.png` per filter
 - When diagnostics are enabled, `analysis/diagnostics/pixel_statistics.csv` and histogram PNGs for random bias/master-bias, flat/master-flat, science calibration, optional stacking normalization, and stacking comparisons
 
+
+### Processing already-calibrated data
+
+When the science frames are already bias/flat corrected, set `input_mode: precalibrated`. This mode skips master-bias creation, master-flat creation, science calibration, and calibration-frame QC. It uses the already-calibrated arrays directly as stack inputs while preserving existing frame alignment, `stacking.normalize_before_stack`, sigma-clipped stacking, channel alignment, visualization, and reporting behavior.
+
+Compact precalibrated configs discover supported FITS files from `data/<OBJECT_NAME>/calibrated/<filter>/`:
+
+```yaml
+object_name: M83
+data_root: data
+input_mode: precalibrated
+filters:
+  - red
+  - green
+  - blue
+alignment:
+  enabled: true
+  method: astroalign
+  min_area: 12
+  fail_policy: raise
+channel_alignment:
+  enabled: true
+  reference_filter: green
+output_dirs:
+  calibrated: data/M83/calibrated
+  stacked: data/M83/stacked
+  figures: data/M83/figures
+  analysis: data/M83/analysis
+```
+
+You can also bypass directory discovery with explicit already-calibrated file lists:
+
+```yaml
+input_mode: precalibrated
+precalibrated_files:
+  red:
+    - path/to/red_001.fits
+    - path/to/red_002.fit
+  green:
+    - path/to/green_001.fts
+output_dirs:
+  calibrated: data/M83/calibrated
+  stacked: data/M83/stacked
+  figures: data/M83/figures
+  analysis: data/M83/analysis
+```
+
+Precalibrated mode writes `stacked_<filter>.fits` to the configured stacked directory, always writes `alignment_report.csv`, and still writes `channel_alignment_report.csv` plus `stacked/aligned_channels/stacked_<filter>_aligned.fits` when channel alignment is enabled. It does not require or read `bias_files`, `flat_files`, `calibration/bias/`, or `calibration/flats/`, and it does not write `master_bias.fits` or `master_flat_<filter>.fits`.
 
 
 ### Stacking scale control
@@ -211,25 +269,47 @@ python scripts/make_demo_figures.py --object M83 --preset galaxy_detail \
   --crop-center 2120 2060 --crop-size 1400
 ```
 
-The `galaxy_detail` preset uses masked unsharp masking by default so bright arms and core structure sharpen without boosting dark-background noise. Raw unsharp masking remains available explicitly when you want to compare against the unmasked method:
+Convolution modes are optional advanced experiments rather than preset defaults. The default `galaxy_detail` render writes `rgb_crop_galaxy_detail.png` with no convolution. Pass `--convolution masked_unsharp` explicitly when you want a method-labeled `rgb_crop_galaxy_detail_masked_unsharp.png` comparison:
 
 ```bash
 python scripts/make_demo_figures.py --object M83 --preset galaxy_detail \
-  --crop-center 2120 2060 --crop-size 1400 --convolution unsharp
+  --crop-center 2120 2060 --crop-size 1400 --convolution masked_unsharp
 ```
 
-Primary visualization controls are `--object`, `--data-root`, `--filters`, `--preset diagnostic|natural|deep_sky|galaxy_detail`, `--crop-center X Y`, `--crop-center-origin 0|1`, `--crop-size SIZE`, `--convolution none|smooth|unsharp|masked_unsharp`, `--mask-percentile`, `--mask-softness`, and the histogram controls `--hist-lower-percentile`, `--hist-upper-percentile`, and `--hist-bins`. Crop centers are supplied as display-style `X Y` coordinates (x=column, y=row); the code converts those to NumPy row/column indexing and prints the interpreted center and clipped crop bounds.
+Primary visualization controls are `--object`, `--data-root`, `--filters`, `--preset diagnostic|natural|deep_sky|galaxy_detail`, `--channels red green blue`, `--crop-center X Y`, `--crop-center-origin 0|1`, `--crop-size SIZE`, `--convolution none|smooth|unsharp|masked_unsharp`, `--mask-percentile`, `--mask-softness`, and the histogram controls `--hist-lower-percentile`, `--hist-upper-percentile`, and `--hist-bins`. Crop centers are supplied as display-style `X Y` coordinates (x=column, y=row); the code converts those to NumPy row/column indexing and prints the interpreted center and clipped crop bounds.
+
+Use `--channels` when you want a color composite from only one or two available channels. Missing RGB planes are filled with zeros, so `--channels red` writes the red data into the red plane only, `--channels blue` writes the blue data into the blue plane only, and `--channels red blue` leaves green black. Requested channels still use the active preset/display limits, display scale, crop-local contrast, selected-channel background/color balance, and optional convolution settings. If a requested channel is not present in the stacked outputs, the CLI raises a clear error instead of requiring the other RGB channels. Example commands:
+
+```bash
+python scripts/make_demo_figures.py --object M83 --preset deep_sky --channels red
+python scripts/make_demo_figures.py --object M83 --preset deep_sky --channels blue
+python scripts/make_demo_figures.py --object M83 --preset deep_sky --channels red blue
+python scripts/make_demo_figures.py --object M83 --preset galaxy_detail --channels red blue \
+  --crop-center 2120 2060 --crop-size 1400
+```
+
+Selected-channel outputs are named by channel selection: `rgb_red_only.png`, `rgb_blue_only.png`, `rgb_red_blue.png`, or with presets such as `rgb_red_only_deep_sky.png` and `rgb_crop_red_blue_galaxy_detail.png`.
 
 Preset behavior is:
 
 - `diagnostic`: zscale + linear, no background neutralization, no color balance, full-frame contrast.
 - `natural`: zscale + squared, background equalization, partial background color balance, full-frame contrast.
 - `deep_sky`: zscale + cubed, background equalization, full background color balance, full-frame contrast.
-- `galaxy_detail`: zscale + squared, background equalization, gentle background color balance, crop-local contrast, full-frame balance, masked unsharp detail enhancement; crop recommended.
+- `galaxy_detail`: zscale + cubed, background equalization, gentle background color balance, crop-local contrast, full-frame balance, no default convolution; crop recommended.
 
 All RGB preset, crop, smoothing, unsharp, and masked-unsharp outputs are PNG-only visualization products. They load calibrated/stacked FITS arrays into memory but do not modify calibrated, stacked, or aligned FITS science data.
 
 Advanced overrides remain available but are intentionally secondary to the presets: `--rgb-limits zscale|percentile`, `--rgb-scale linear|squared|cubed|sqrt|log|asinh|gamma`, `--background-neutralization none|subtract|equalize`, `--background-percentile`, `--color-balance none|background|median|max`, `--color-balance-strength`, `--channel-scales R G B`, `--smooth-sigma`, `--unsharp-sigma`, `--unsharp-amount`, `--mask-percentile`, `--mask-softness`, `--zscale-contrast`, `--lower`, `--upper`, `--gamma`, `--stretch`, `--contrast-region full|crop`, and `--balance-region full|crop`. The older `--ds9like`, manual named-scale outputs, and `--galaxy-detail-grid` comparison output remain available as explicit advanced/debug tools; large comparison grids are not generated unless requested.
+
+Generate a compact object-level Markdown report after running calibration and visualization:
+
+```bash
+python scripts/generate_object_report.py --object M83
+python scripts/generate_object_report.py --object M83 --data-root data
+```
+
+The report is written to `data/<OBJECT_NAME>/analysis/report.md` and summarizes the object layout, stacked and aligned FITS products, key visualization PNGs, calibration QC warnings/statistics, alignment status counts, diagnostic plots, and suggested manual checks. The optional summary-sheet concept is tracked as a TODO; the current implementation intentionally keeps reporting portable and Markdown-only.
+
 
 
 Alignment remains enabled by default and can still be controlled with the legacy top-level `align: true` or `align: false` flag. New configs can use an `alignment` block for diagnostics and tuning; when `alignment.enabled` is present, it overrides the legacy `align` value. The default settings preserve the previous behavior:
@@ -260,7 +340,7 @@ channel_alignment:
 
 The reference filter defaults to green when green is available, otherwise the first available filter is used. Successful outputs are written under `data/<OBJECT_NAME>/stacked/aligned_channels/` as `stacked_<filter>_aligned.fits`, and `channel_alignment_report.csv` records each channel status (`reference`, `aligned`, or `failed`). `scripts/make_demo_figures.py` still renders per-filter previews from the regular stacked products, but its RGB composite prefers aligned channel files when they exist and falls back to regular `stacked_<filter>.fits` files otherwise; the CLI prints the RGB source paths it used.
 
-Explicit config mode is still supported for custom file selections. Use `configs/m83_explicit_example.yaml` as a template with `bias_files`, `flat_files`, `science_files`, and optional `output_dirs`. For backward compatibility, older configs can omit `output_dirs` and keep using `output_dir`; in that case all generated FITS outputs are written to the single legacy directory.
+Explicit raw config mode is still supported for custom file selections. Use `configs/m83_explicit_example.yaml` as a template with `bias_files`, `flat_files`, `science_files`, and optional `output_dirs`. For precalibrated data, use `input_mode: precalibrated` with `precalibrated_files`. For backward compatibility, older configs can omit `output_dirs` and keep using `output_dir`; in that case all generated FITS outputs are written to the single legacy directory.
 
 ## Testing
 

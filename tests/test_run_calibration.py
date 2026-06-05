@@ -694,3 +694,270 @@ def test_run_pipeline_triggers_calibration_qc_without_default_rejection(tmp_path
     assert calls["bias_paths"] == [files["bias"]]
     assert calls["flat_args"][tmp_path.name] == ([files["flat"]], master_bias)
     assert output_dir / "diagnostics" / "calibration_qc_warnings.txt" in written
+
+
+def _create_precalibrated_tree(tmp_path, filters=("red", "green")):
+    data_root = tmp_path / "data"
+    object_dir = data_root / "M83"
+    files = {}
+    for filter_name in filters:
+        files[filter_name] = [
+            _touch(object_dir / "calibrated" / filter_name / f"cal_{filter_name}_002.FIT"),
+            _touch(object_dir / "calibrated" / filter_name / f"cal_{filter_name}_001.fts"),
+        ]
+        _touch(object_dir / "calibrated" / filter_name / f"cal_{filter_name}_notes.txt")
+    return data_root, object_dir, files
+
+
+def _write_precalibrated_compact_config(path, data_root, filters=("red", "green"), object_name="M83"):
+    filter_lines = "\n".join(f"  - {filter_name}" for filter_name in filters)
+    path.write_text(
+        f"""
+object_name: {object_name}
+data_root: {data_root}
+input_mode: precalibrated
+filters:
+{filter_lines}
+align: false
+sigma: 3
+maxiters: 5
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _mock_precalibrated_pipeline_helpers(monkeypatch):
+    calls = {}
+    stacked = [[4.0, 4.0], [4.0, 4.0]]
+    saved = []
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("raw calibration helpers must not run in precalibrated mode")
+
+    def fake_stack_precalibrated_files(
+        calibrated_files,
+        align,
+        min_area,
+        sigma,
+        maxiters,
+        return_alignment_report=False,
+        filter_name=None,
+        fail_policy="raise",
+        alignment_method="astroalign",
+        detection_sigma=None,
+        normalize_before_stack=False,
+    ):
+        calls.setdefault("stack_args", {})[filter_name] = (
+            calibrated_files,
+            align,
+            min_area,
+            sigma,
+            maxiters,
+            return_alignment_report,
+            filter_name,
+            fail_policy,
+            alignment_method,
+            detection_sigma,
+            normalize_before_stack,
+        )
+        records = [
+            {
+                "filter": filter_name or "",
+                "file_path": str(calibrated_files[0]),
+                "index": 0,
+                "status": "skipped" if not align else "reference",
+                "error": "",
+                "method": alignment_method if align else "",
+                "min_area": min_area,
+            }
+        ]
+        if return_alignment_report:
+            return stacked, records
+        return stacked
+
+    def fake_save_fits(data, header, path, overwrite=True):
+        saved.append((data, header, path, overwrite))
+        path.write_text("written", encoding="utf-8")
+
+    monkeypatch.setattr(run_calibration, "make_master_bias", fail_if_called)
+    monkeypatch.setattr(run_calibration, "make_master_flat", fail_if_called)
+    monkeypatch.setattr(run_calibration, "calibrate_and_stack", fail_if_called)
+    monkeypatch.setattr(run_calibration, "run_calibration_qc", fail_if_called)
+    monkeypatch.setattr(run_calibration, "run_pipeline_diagnostics", fail_if_called)
+    monkeypatch.setattr(run_calibration, "stack_precalibrated_files", fake_stack_precalibrated_files)
+    monkeypatch.setattr(
+        run_calibration,
+        "load_fits",
+        lambda path: ([[9.0, 9.0], [9.0, 9.0]], {"SRC": str(path)}),
+    )
+    monkeypatch.setattr(run_calibration, "save_fits", fake_save_fits)
+    return calls, saved
+
+
+def test_validate_config_input_mode_defaults_to_raw(tmp_path):
+    files = _input_files(tmp_path)
+
+    validated = run_calibration._validate_config(
+        {
+            "bias_files": [str(files["bias"])],
+            "flat_files": {"red": [str(files["flat"])]},
+            "science_files": {"red": [str(files["science"])]},
+            "output_dir": str(tmp_path / "out"),
+        }
+    )
+
+    assert validated["input_mode"] == "raw"
+
+
+def test_precalibrated_mode_discovers_calibrated_files_without_bias_or_flats(tmp_path):
+    data_root, _object_dir, files = _create_precalibrated_tree(tmp_path, filters=("red", "green"))
+    config_path = tmp_path / "config.yaml"
+    _write_precalibrated_compact_config(config_path, data_root)
+
+    validated = run_calibration._validate_config(run_calibration._load_yaml_config(config_path))
+
+    assert validated["input_mode"] == "precalibrated"
+    assert validated["bias_files"] == []
+    assert validated["flat_files"] == {}
+    assert validated["science_files"] == {}
+    assert validated["precalibrated_files"] == {
+        "green": sorted(files["green"]),
+        "red": sorted(files["red"]),
+    }
+
+
+def test_precalibrated_mode_reports_missing_calibrated_filter_directory(tmp_path):
+    data_root, object_dir, _files = _create_precalibrated_tree(tmp_path, filters=("red",))
+    config_path = tmp_path / "config.yaml"
+    _write_precalibrated_compact_config(config_path, data_root, filters=("red", "blue"))
+
+    with pytest.raises(
+        run_calibration.ConfigError,
+        match="Required precalibrated science for filter 'blue' directory does not exist",
+    ):
+        run_calibration._validate_config(run_calibration._load_yaml_config(config_path))
+
+    assert not (object_dir / "calibration" / "bias").exists()
+
+
+def test_run_pipeline_precalibrated_stacks_and_writes_alignment_report(tmp_path, monkeypatch):
+    data_root, object_dir, files = _create_precalibrated_tree(tmp_path, filters=("red", "green"))
+    config_path = tmp_path / "config.yaml"
+    _write_precalibrated_compact_config(config_path, data_root)
+    calls, saved = _mock_precalibrated_pipeline_helpers(monkeypatch)
+
+    written = run_calibration.run_pipeline(config_path)
+
+    for filter_name in ("red", "green"):
+        assert calls["stack_args"][filter_name] == (
+            sorted(files[filter_name]),
+            False,
+            12,
+            3,
+            5,
+            True,
+            filter_name,
+            "raise",
+            "astroalign",
+            None,
+            False,
+        )
+    assert written == [
+        object_dir / "stacked" / "stacked_green.fits",
+        object_dir / "stacked" / "stacked_red.fits",
+        object_dir / "analysis" / "alignment_report.csv",
+    ]
+    assert [item[2] for item in saved] == written[:-1]
+    assert not (object_dir / "calibrated" / "master_bias.fits").exists()
+    assert not (object_dir / "calibrated" / "master_flat_red.fits").exists()
+
+
+def test_run_pipeline_precalibrated_can_run_channel_alignment(tmp_path, monkeypatch):
+    data_root, object_dir, _files = _create_precalibrated_tree(tmp_path, filters=("red", "green"))
+    config_path = tmp_path / "config.yaml"
+    _write_precalibrated_compact_config(config_path, data_root)
+    with config_path.open("a", encoding="utf-8") as config_file:
+        config_file.write(
+            "channel_alignment:\n"
+            "  enabled: true\n"
+            "  reference_filter: green\n"
+        )
+    _calls, _saved = _mock_precalibrated_pipeline_helpers(monkeypatch)
+
+    def fake_align_stacked_channels(stacked_paths, output_dir, reference_filter, method, min_area, fail_policy):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        green_output = output_dir / "stacked_green_aligned.fits"
+        red_output = output_dir / "stacked_red_aligned.fits"
+        green_output.write_text("aligned", encoding="utf-8")
+        red_output.write_text("aligned", encoding="utf-8")
+        return [
+            {
+                "filter": "green",
+                "input_path": str(stacked_paths["green"]),
+                "output_path": str(green_output),
+                "status": "reference",
+                "reference_filter": reference_filter,
+                "method": method,
+                "min_area": min_area,
+                "error": "",
+            },
+            {
+                "filter": "red",
+                "input_path": str(stacked_paths["red"]),
+                "output_path": str(red_output),
+                "status": "aligned",
+                "reference_filter": reference_filter,
+                "method": method,
+                "min_area": min_area,
+                "error": "",
+            },
+        ]
+
+    monkeypatch.setattr(run_calibration, "align_stacked_channels", fake_align_stacked_channels)
+
+    written = run_calibration.run_pipeline(config_path)
+
+    aligned_dir = object_dir / "stacked" / "aligned_channels"
+    assert aligned_dir / "stacked_green_aligned.fits" in written
+    assert aligned_dir / "stacked_red_aligned.fits" in written
+    assert object_dir / "analysis" / "channel_alignment_report.csv" in written
+    assert object_dir / "analysis" / "alignment_report.csv" in written
+
+
+def test_precalibrated_mode_accepts_explicit_precalibrated_files(tmp_path, monkeypatch):
+    red_file = _touch(tmp_path / "inputs" / "red_1.fits")
+    green_file = _touch(tmp_path / "inputs" / "green_1.fts")
+    output_dirs = {
+        "calibrated": tmp_path / "out" / "calibrated",
+        "stacked": tmp_path / "out" / "stacked",
+        "figures": tmp_path / "out" / "figures",
+        "analysis": tmp_path / "out" / "analysis",
+    }
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        f"""
+input_mode: precalibrated
+precalibrated_files:
+  red:
+    - {red_file}
+  green:
+    - {green_file}
+output_dirs:
+  calibrated: {output_dirs['calibrated']}
+  stacked: {output_dirs['stacked']}
+  figures: {output_dirs['figures']}
+  analysis: {output_dirs['analysis']}
+align: false
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    calls, _saved = _mock_precalibrated_pipeline_helpers(monkeypatch)
+
+    written = run_calibration.run_pipeline(config_path)
+
+    assert calls["stack_args"]["green"][0] == [green_file]
+    assert calls["stack_args"]["red"][0] == [red_file]
+    assert output_dirs["stacked"] / "stacked_green.fits" in written
+    assert output_dirs["stacked"] / "stacked_red.fits" in written

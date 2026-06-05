@@ -445,3 +445,62 @@ def test_signal_mask_validates_percentile_and_softness():
         enhancement.signal_mask_from_luminance(rgb, percentile=101)
     with pytest.raises(ValueError, match="softness"):
         enhancement.signal_mask_from_luminance(rgb, softness=-1)
+
+
+def test_make_partial_rgb_red_only_zeroes_missing_planes():
+    red = np.arange(9, dtype=float).reshape(3, 3)
+
+    rgb = enhancement.make_partial_rgb(
+        {"red": red},
+        ["red"],
+        limits="percentile",
+        lower=0,
+        upper=100,
+        scale="linear",
+    )
+
+    assert rgb.shape == (3, 3, 3)
+    assert np.any(rgb[..., 0] > 0)
+    np.testing.assert_allclose(rgb[..., 1], 0)
+    np.testing.assert_allclose(rgb[..., 2], 0)
+
+
+def test_make_partial_rgb_blue_only_zeroes_red_and_green_planes():
+    blue = np.arange(9, dtype=float).reshape(3, 3)
+
+    rgb = enhancement.make_partial_rgb(
+        {"blue": blue},
+        ["blue"],
+        limits="percentile",
+        lower=0,
+        upper=100,
+        scale="linear",
+    )
+
+    np.testing.assert_allclose(rgb[..., 0], 0)
+    np.testing.assert_allclose(rgb[..., 1], 0)
+    assert np.any(rgb[..., 2] > 0)
+
+
+def test_make_partial_rgb_red_blue_zeroes_green_plane():
+    base = np.arange(9, dtype=float).reshape(3, 3)
+
+    rgb = enhancement.make_partial_rgb(
+        {"red": base, "blue": base + 1},
+        ["red", "blue"],
+        limits="percentile",
+        lower=0,
+        upper=100,
+        scale="linear",
+        background_neutralization="equalize",
+        color_balance="background",
+    )
+
+    assert np.any(rgb[..., 0] > 0)
+    np.testing.assert_allclose(rgb[..., 1], 0)
+    assert np.any(rgb[..., 2] > 0)
+
+
+def test_make_partial_rgb_missing_selected_channel_raises_clear_error():
+    with pytest.raises(ValueError, match="missing selected channel"):
+        enhancement.make_partial_rgb({"red": np.ones((2, 2))}, ["blue"])

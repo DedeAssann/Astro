@@ -95,10 +95,9 @@ def _alignment_report_record(
     }
 
 
-def calibrate_and_stack(
-    science_files,
-    master_bias,
-    master_flat,
+def _prepare_and_stack_files(
+    image_files,
+    image_preparer,
     align=True,
     min_area=12,
     sigma=2,
@@ -110,28 +109,10 @@ def calibrate_and_stack(
     detection_sigma=None,
     normalize_before_stack=False,
 ):
-    """Load, calibrate, optionally align, and stack science FITS images.
-
-    Each science frame is loaded with :func:`astro_image_lab.io.load_fits` and
-    calibrated via ``(image - master_bias) / master_flat`` using
-    :func:`astro_image_lab.calibration.calibrate_science_image`. By default, the
-    final stack preserves that calibrated pixel scale. Set
-    ``normalize_before_stack=True`` to reproduce the original notebook/script
-    behavior of dividing each calibrated frame by its median before stacking.
-
-    When ``align=True``, normalized copies are used for source detection and
-    registration. If ``normalize_before_stack`` is false, the transform inferred
-    from the normalized copy is applied to the calibrated image so the final
-    stack remains in calibrated units. The first science image is not skipped,
-    correcting the indexing bug in ``doc/processing.py``. The ``sigma`` and
-    ``maxiters`` arguments are forwarded to
-    :func:`astro_image_lab.stacking.stack_images`. Set
-    ``return_alignment_report=True`` to return ``(stacked_image, records)``
-    instead of just the stacked image.
-    """
-    science_files = list(science_files)
-    if not science_files:
-        raise ValueError("science_files must contain at least one FITS file")
+    """Load, prepare, optionally align, and stack FITS image files."""
+    image_files = list(image_files)
+    if not image_files:
+        raise ValueError("image_files must contain at least one FITS file")
     if fail_policy not in {"raise", "skip"}:
         raise ValueError("fail_policy must be 'raise' or 'skip'")
     if alignment_method != "astroalign":
@@ -147,12 +128,12 @@ def calibrate_and_stack(
     reference_detection_image = None
     reference_stack_image = None
 
-    for index, path in enumerate(science_files):
-        science_data, _header = load_fits(path)
-        calibrated = calibrate_science_image(science_data, master_bias, master_flat)
+    for index, path in enumerate(image_files):
+        image_data, _header = load_fits(path)
+        prepared_image = image_preparer(image_data)
         needs_normalized_copy = align or normalize_before_stack
-        normalized = normalize_by_median(calibrated) if needs_normalized_copy else None
-        stack_image = normalized if normalize_before_stack else calibrated
+        normalized = normalize_by_median(prepared_image) if needs_normalized_copy else None
+        stack_image = normalized if normalize_before_stack else prepared_image
 
         if not align:
             stack_inputs.append(stack_image)
@@ -199,7 +180,7 @@ def calibrate_and_stack(
                     normalized, reference_detection_image, **register_kwargs
                 )
                 registered_image, _footprint = astroalign.apply_transform(
-                    transform, calibrated, reference_stack_image
+                    transform, prepared_image, reference_stack_image
                 )
         except Exception as exc:
             report_records.append(
@@ -237,3 +218,97 @@ def calibrate_and_stack(
     if return_alignment_report:
         return stacked_image, report_records
     return stacked_image
+
+
+def calibrate_and_stack(
+    science_files,
+    master_bias,
+    master_flat,
+    align=True,
+    min_area=12,
+    sigma=2,
+    maxiters=10,
+    return_alignment_report=False,
+    filter_name=None,
+    fail_policy="raise",
+    alignment_method="astroalign",
+    detection_sigma=None,
+    normalize_before_stack=False,
+):
+    """Load, calibrate, optionally align, and stack science FITS images.
+
+    Each science frame is loaded with :func:`astro_image_lab.io.load_fits` and
+    calibrated via ``(image - master_bias) / master_flat`` using
+    :func:`astro_image_lab.calibration.calibrate_science_image`. By default, the
+    final stack preserves that calibrated pixel scale. Set
+    ``normalize_before_stack=True`` to reproduce the original notebook/script
+    behavior of dividing each calibrated frame by its median before stacking.
+
+    When ``align=True``, normalized copies are used for source detection and
+    registration. If ``normalize_before_stack`` is false, the transform inferred
+    from the normalized copy is applied to the calibrated image so the final
+    stack remains in calibrated units. The first science image is not skipped,
+    correcting the indexing bug in ``doc/processing.py``. The ``sigma`` and
+    ``maxiters`` arguments are forwarded to
+    :func:`astro_image_lab.stacking.stack_images`. Set
+    ``return_alignment_report=True`` to return ``(stacked_image, records)``
+    instead of just the stacked image.
+    """
+    science_files = list(science_files)
+    if not science_files:
+        raise ValueError("science_files must contain at least one FITS file")
+
+    return _prepare_and_stack_files(
+        science_files,
+        lambda science_data: calibrate_science_image(science_data, master_bias, master_flat),
+        align=align,
+        min_area=min_area,
+        sigma=sigma,
+        maxiters=maxiters,
+        return_alignment_report=return_alignment_report,
+        filter_name=filter_name,
+        fail_policy=fail_policy,
+        alignment_method=alignment_method,
+        detection_sigma=detection_sigma,
+        normalize_before_stack=normalize_before_stack,
+    )
+
+
+def stack_precalibrated_files(
+    calibrated_files,
+    align=True,
+    min_area=12,
+    sigma=2,
+    maxiters=10,
+    return_alignment_report=False,
+    filter_name=None,
+    fail_policy="raise",
+    alignment_method="astroalign",
+    detection_sigma=None,
+    normalize_before_stack=False,
+):
+    """Load already-calibrated FITS images, optionally align, and stack them.
+
+    No bias subtraction or flat-field correction is applied. Inputs are used
+    directly as calibrated stack inputs while preserving the same alignment,
+    sigma-clipping, and optional median-normalization behavior as
+    :func:`calibrate_and_stack`.
+    """
+    calibrated_files = list(calibrated_files)
+    if not calibrated_files:
+        raise ValueError("calibrated_files must contain at least one FITS file")
+
+    return _prepare_and_stack_files(
+        calibrated_files,
+        lambda image_data: np.asarray(image_data, dtype=float),
+        align=align,
+        min_area=min_area,
+        sigma=sigma,
+        maxiters=maxiters,
+        return_alignment_report=return_alignment_report,
+        filter_name=filter_name,
+        fail_policy=fail_policy,
+        alignment_method=alignment_method,
+        detection_sigma=detection_sigma,
+        normalize_before_stack=normalize_before_stack,
+    )

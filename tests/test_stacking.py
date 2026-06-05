@@ -228,3 +228,23 @@ def test_calibrate_and_stack_alignment_failure_raise_records_then_raises(monkeyp
             return_alignment_report=True,
             normalize_before_stack=True,
         )
+
+
+def test_stack_precalibrated_files_uses_input_arrays_directly(monkeypatch):
+    frames = {
+        "cal_1.fits": np.array([[10, 20], [30, 40]], dtype=float),
+        "cal_2.fits": np.array([[20, 30], [40, 50]], dtype=float),
+    }
+    monkeypatch.setattr(stacking, "load_fits", lambda path: (frames[path], {}))
+
+    stacked, report = stacking.stack_precalibrated_files(
+        frames.keys(),
+        align=False,
+        return_alignment_report=True,
+        filter_name="red",
+    )
+
+    expected = np.nanmean(np.asarray(list(frames.values()), dtype=float), axis=0).astype(np.float32)
+    np.testing.assert_allclose(stacked, expected)
+    assert [record["status"] for record in report] == ["skipped", "skipped"]
+    assert all(record["filter"] == "red" for record in report)
