@@ -85,7 +85,7 @@ Create one YAML config per observed object. The compact example `configs/m83_exa
 python scripts/run_calibration.py --config configs/m83_example.yaml
 ```
 
-Recommended V2 review workflow after calibration:
+Recommended V2 review workflow after calibration. Before observing or processing a new local object, use the [data acquisition and dataset validation guide](docs/acquisition_guide.md) to collect enough frames and check dataset completeness.
 
 ```bash
 python scripts/make_demo_figures.py --object M83 --preset deep_sky

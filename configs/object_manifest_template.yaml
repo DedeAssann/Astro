@@ -1,0 +1,58 @@
+# Copy this template for each acquisition session/object and commit only the
+# filled manifest if it does not contain private paths or unreleased data notes.
+object_name: "<OBJECT>"
+acquisition_date: "YYYY-MM-DD"
+observer: "<OBSERVER_NAME>"
+telescope: "<TELESCOPE_OR_LENS>"
+camera: "<CAMERA_MODEL>"
+pixel_scale_arcsec: null
+
+input_mode: raw  # raw or precalibrated
+filters:
+  red:
+    exposure_time_s: null
+    expected_science_frames: 15-30
+    minimum_science_frames: 5
+    expected_flat_frames: 20-30
+    minimum_flat_frames: 10
+  green:
+    exposure_time_s: null
+    expected_science_frames: 15-30
+    minimum_science_frames: 5
+    expected_flat_frames: 20-30
+    minimum_flat_frames: 10
+  blue:
+    exposure_time_s: null
+    expected_science_frames: 15-30
+    minimum_science_frames: 5
+    expected_flat_frames: 20-30
+    minimum_flat_frames: 10
+
+calibration_targets:
+  bias_frames:
+    recommended_count: 30-50
+    minimum_count: 15
+    match_camera_settings: true
+    notes: "Keep gain, offset, readout mode, bit depth, binning, and temperature matched to science frames."
+  flats:
+    recommended_count_per_filter: 20-30
+    minimum_count_per_filter: 10
+    linear_regime_required: true
+    saturated_allowed: false
+    notes: "Use the same optical train, focus, rotation, and filter as the matching science frames."
+
+folder_layout:
+  object_root: "data/<OBJECT>/"
+  raw_science: "data/<OBJECT>/raw/<filter>/"
+  bias: "data/<OBJECT>/calibration/bias/"
+  flats: "data/<OBJECT>/calibration/flats/<filter>/"
+  precalibrated_science: "data/<OBJECT>/calibrated/<filter>/"
+  stacked: "data/<OBJECT>/stacked/"
+  figures: "data/<OBJECT>/figures/"
+  analysis: "data/<OBJECT>/analysis/"
+
+notes:
+  acquisition_conditions: "<seeing/transparency/moon/clouds>"
+  camera_settings: "<gain/offset/temperature/binning/readout_mode>"
+  known_issues: "<mixed frames, clouds, tracking, saturation, crop concerns>"
+  validation_status: "pending"
