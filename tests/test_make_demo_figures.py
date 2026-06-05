@@ -346,16 +346,17 @@ def test_visualization_presets_map_to_expected_parameters():
     assert deep_sky["background_neutralization"] == "equalize"
     assert deep_sky["color_balance"] == "background"
     galaxy_detail = make_demo_figures._resolve_display_options("galaxy_detail")
+    assert galaxy_detail["scale"] == "cubed"
     assert galaxy_detail["contrast_region"] == "crop"
     assert galaxy_detail["balance_region"] == "full"
-    assert galaxy_detail["convolution"] == "masked_unsharp"
-    assert galaxy_detail["masked_unsharp"] is True
+    assert galaxy_detail["convolution"] == "none"
+    assert galaxy_detail["masked_unsharp"] is False
     assert galaxy_detail["mask_percentile"] == pytest.approx(65)
     assert galaxy_detail["mask_softness"] == pytest.approx(1.0)
     assert galaxy_detail["color_balance_strength"] == pytest.approx(0.35)
     assert galaxy_detail["channel_scales"] == (1.0, 1.0, 1.0)
-    assert galaxy_detail["unsharp_sigma"] == pytest.approx(1.8)
-    assert galaxy_detail["unsharp_amount"] == pytest.approx(0.35)
+    assert galaxy_detail["unsharp_sigma"] is None
+    assert galaxy_detail["unsharp_amount"] is None
 
 
 def test_explicit_cli_values_override_preset_values():
@@ -411,8 +412,11 @@ def test_galaxy_detail_preset_crop_output_is_written(tmp_path, monkeypatch, caps
     )
 
     crop_path = data_root / "M83" / "figures" / "rgb_crop_galaxy_detail.png"
+    masked_path = data_root / "M83" / "figures" / "rgb_crop_galaxy_detail_masked_unsharp.png"
     assert crop_path in written
     assert crop_path.is_file()
+    assert masked_path not in written
+    assert not masked_path.exists()
     stdout = capsys.readouterr().out
     assert "requested X,Y=(3, 2)" in stdout
     assert "interpreted NumPy row,col=(1.0, 2.0)" in stdout

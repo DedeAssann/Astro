@@ -221,14 +221,11 @@ python scripts/make_demo_figures.py --object M83 --preset galaxy_detail \
   --crop-center 2120 2060 --crop-size 1400
 ```
 
-The `galaxy_detail` preset uses masked unsharp masking by default so bright arms and core structure sharpen without boosting dark-background noise. Pass `--convolution masked_unsharp` explicitly when you want a method-labeled `rgb_crop_galaxy_detail_masked_unsharp.png`; raw unsharp masking remains available when you want to compare against the unmasked method:
+Convolution modes are optional advanced experiments rather than preset defaults. The default `galaxy_detail` render writes `rgb_crop_galaxy_detail.png` with no convolution. Pass `--convolution masked_unsharp` explicitly when you want a method-labeled `rgb_crop_galaxy_detail_masked_unsharp.png` comparison:
 
 ```bash
 python scripts/make_demo_figures.py --object M83 --preset galaxy_detail \
   --crop-center 2120 2060 --crop-size 1400 --convolution masked_unsharp
-
-python scripts/make_demo_figures.py --object M83 --preset galaxy_detail \
-  --crop-center 2120 2060 --crop-size 1400 --convolution unsharp
 ```
 
 Primary visualization controls are `--object`, `--data-root`, `--filters`, `--preset diagnostic|natural|deep_sky|galaxy_detail`, `--crop-center X Y`, `--crop-center-origin 0|1`, `--crop-size SIZE`, `--convolution none|smooth|unsharp|masked_unsharp`, `--mask-percentile`, `--mask-softness`, and the histogram controls `--hist-lower-percentile`, `--hist-upper-percentile`, and `--hist-bins`. Crop centers are supplied as display-style `X Y` coordinates (x=column, y=row); the code converts those to NumPy row/column indexing and prints the interpreted center and clipped crop bounds.
@@ -238,7 +235,7 @@ Preset behavior is:
 - `diagnostic`: zscale + linear, no background neutralization, no color balance, full-frame contrast.
 - `natural`: zscale + squared, background equalization, partial background color balance, full-frame contrast.
 - `deep_sky`: zscale + cubed, background equalization, full background color balance, full-frame contrast.
-- `galaxy_detail`: zscale + squared, background equalization, gentle background color balance, crop-local contrast, full-frame balance, masked unsharp detail enhancement; crop recommended.
+- `galaxy_detail`: zscale + cubed, background equalization, gentle background color balance, crop-local contrast, full-frame balance, no default convolution; crop recommended.
 
 All RGB preset, crop, smoothing, unsharp, and masked-unsharp outputs are PNG-only visualization products. They load calibrated/stacked FITS arrays into memory but do not modify calibrated, stacked, or aligned FITS science data.
 
