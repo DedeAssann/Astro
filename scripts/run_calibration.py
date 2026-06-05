@@ -23,12 +23,14 @@ make_master_flat = None
 load_fits = None
 save_fits = None
 calibrate_and_stack = None
+stack_precalibrated_files = None
 align_stacked_channels = None
 run_pipeline_diagnostics = None
 run_calibration_qc = None
 
 EXPLICIT_INPUT_FIELDS = ("bias_files", "flat_files", "science_files")
 COMPACT_INPUT_FIELDS = ("object_name", "data_root", "filters")
+INPUT_MODES = {"raw", "precalibrated"}
 OUTPUT_DIR_FIELDS = ("calibrated", "stacked", "figures", "analysis")
 
 
@@ -220,7 +222,7 @@ def _discover_fits_files(directory: Path, label: str) -> list[Path]:
 def _infer_input_files(
     object_dir: Path, filters: list[str]
 ) -> tuple[list[Path], dict[str, list[Path]], dict[str, list[Path]]]:
-    """Discover input FITS files from the standard object directory layout."""
+    """Discover raw-mode input FITS files from the standard object layout."""
     bias_files = _discover_fits_files(object_dir / "calibration" / "bias", "bias")
     flat_files = {
         filter_name: _discover_fits_files(
@@ -237,6 +239,17 @@ def _infer_input_files(
         for filter_name in filters
     }
     return bias_files, flat_files, science_files
+
+
+def _infer_precalibrated_files(object_dir: Path, filters: list[str]) -> dict[str, list[Path]]:
+    """Discover precalibrated FITS files from ``calibrated/<filter>/`` directories."""
+    return {
+        filter_name: _discover_fits_files(
+            object_dir / "calibrated" / filter_name,
+            f"precalibrated science for filter '{filter_name}'",
+        )
+        for filter_name in filters
+    }
 
 
 def _validate_alignment_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -538,10 +551,21 @@ def _validate_diagnostics_config(config: dict[str, Any]) -> dict[str, Any]:
 
     return diagnostics
 
+
+def _validate_input_mode(config: dict[str, Any]) -> str:
+    """Return normalized input mode, preserving raw mode as the default."""
+    input_mode = config.get("input_mode", "raw")
+    if input_mode not in INPUT_MODES:
+        raise ConfigError("Config field 'input_mode' must be 'raw' or 'precalibrated'")
+    return input_mode
+
+
 def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
     """Validate config shape, discover compact inputs, and fill optional defaults."""
+    input_mode = _validate_input_mode(config)
     has_explicit_inputs = all(field in config for field in EXPLICIT_INPUT_FIELDS)
     has_any_explicit_input = any(field in config for field in EXPLICIT_INPUT_FIELDS)
+    has_explicit_precalibrated = "precalibrated_files" in config
     has_compact_inputs = all(field in config for field in COMPACT_INPUT_FIELDS)
 
     object_name = config.get("object_name")
@@ -549,47 +573,72 @@ def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
         raise ConfigError("Config field 'object_name' must be a non-empty string when provided")
 
     object_dir: Path | None = None
+    filters: list[str] | None = None
     if has_compact_inputs:
         data_root = _require_non_empty_string(config, "data_root")
         filters = _require_filters(config)
         object_dir = Path(data_root) / _require_non_empty_string(config, "object_name")
 
-    if has_explicit_inputs:
-        bias_files = [Path(path) for path in _require_non_empty_list(config, "bias_files")]
-        flat_files = {
-            name: [Path(path) for path in paths]
-            for name, paths in _require_filter_mapping(config, "flat_files").items()
-        }
-        science_files = {
-            name: [Path(path) for path in paths]
-            for name, paths in _require_filter_mapping(config, "science_files").items()
-        }
-    elif has_any_explicit_input:
-        missing_fields = [field for field in EXPLICIT_INPUT_FIELDS if field not in config]
-        missing = ", ".join(missing_fields)
-        raise ConfigError(
-            "Config must provide all explicit input fields "
-            f"(missing: {missing}) or use compact object_name/data_root/filters discovery"
-        )
-    elif has_compact_inputs:
-        bias_files, flat_files, science_files = _infer_input_files(object_dir, filters)
-    else:
-        raise ConfigError(
-            "Config must provide either explicit bias_files, flat_files, science_files "
-            "or compact object_name, data_root, filters"
-        )
+    if input_mode == "raw":
+        if has_explicit_precalibrated:
+            raise ConfigError("Config field 'precalibrated_files' requires input_mode: precalibrated")
+        if has_explicit_inputs:
+            bias_files = [Path(path) for path in _require_non_empty_list(config, "bias_files")]
+            flat_files = {
+                name: [Path(path) for path in paths]
+                for name, paths in _require_filter_mapping(config, "flat_files").items()
+            }
+            science_files = {
+                name: [Path(path) for path in paths]
+                for name, paths in _require_filter_mapping(config, "science_files").items()
+            }
+        elif has_any_explicit_input:
+            missing_fields = [field for field in EXPLICIT_INPUT_FIELDS if field not in config]
+            missing = ", ".join(missing_fields)
+            raise ConfigError(
+                "Config must provide all explicit input fields "
+                f"(missing: {missing}) or use compact object_name/data_root/filters discovery"
+            )
+        elif has_compact_inputs:
+            bias_files, flat_files, science_files = _infer_input_files(object_dir, filters)
+        else:
+            raise ConfigError(
+                "Config must provide either explicit bias_files, flat_files, science_files "
+                "or compact object_name, data_root, filters"
+            )
 
-    flat_filters = set(flat_files)
-    science_filters = set(science_files)
-    if flat_filters != science_filters:
-        missing_flat = sorted(science_filters - flat_filters)
-        missing_science = sorted(flat_filters - science_filters)
-        details = []
-        if missing_flat:
-            details.append(f"missing flat_files for filter(s): {', '.join(missing_flat)}")
-        if missing_science:
-            details.append(f"missing science_files for filter(s): {', '.join(missing_science)}")
-        raise ConfigError("Config filter mismatch: " + "; ".join(details))
+        flat_filters = set(flat_files)
+        science_filters = set(science_files)
+        if flat_filters != science_filters:
+            missing_flat = sorted(science_filters - flat_filters)
+            missing_science = sorted(flat_filters - science_filters)
+            details = []
+            if missing_flat:
+                details.append(f"missing flat_files for filter(s): {', '.join(missing_flat)}")
+            if missing_science:
+                details.append(f"missing science_files for filter(s): {', '.join(missing_science)}")
+            raise ConfigError("Config filter mismatch: " + "; ".join(details))
+        precalibrated_files: dict[str, list[Path]] = {}
+    else:
+        if has_any_explicit_input:
+            raise ConfigError(
+                "Config fields bias_files, flat_files, and science_files are only valid for input_mode: raw"
+            )
+        bias_files = []
+        flat_files = {}
+        science_files = {}
+        if has_explicit_precalibrated:
+            precalibrated_files = {
+                name: [Path(path) for path in paths]
+                for name, paths in _require_filter_mapping(config, "precalibrated_files").items()
+            }
+        elif has_compact_inputs:
+            precalibrated_files = _infer_precalibrated_files(object_dir, filters)
+        else:
+            raise ConfigError(
+                "Config must provide precalibrated_files or compact object_name, data_root, filters "
+                "when input_mode is 'precalibrated'"
+            )
 
     output_dirs = _normalize_output_dirs(config, object_dir)
 
@@ -608,9 +657,11 @@ def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
         raise ConfigError("Config field 'maxiters' must be a non-negative integer or null")
 
     return {
+        "input_mode": input_mode,
         "bias_files": bias_files,
         "flat_files": flat_files,
         "science_files": science_files,
+        "precalibrated_files": precalibrated_files,
         "object_name": object_name,
         "object_dir": object_dir,
         "output_dirs": output_dirs,
@@ -627,6 +678,12 @@ def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
 
 def _input_paths(config: dict[str, Any]) -> list[Path]:
     """Collect all configured input FITS paths."""
+    if config["input_mode"] == "precalibrated":
+        paths: list[Path] = []
+        for file_list in config["precalibrated_files"].values():
+            paths.extend(file_list)
+        return paths
+
     paths = list(config["bias_files"])
     for files_by_filter in (config["flat_files"], config["science_files"]):
         for file_list in files_by_filter.values():
@@ -645,7 +702,8 @@ def _ensure_input_files_exist(paths: list[Path]) -> None:
 def _get_pipeline_functions():
     """Import pipeline helpers lazily after config and file validation."""
     global make_master_bias, make_master_flat, load_fits, save_fits
-    global calibrate_and_stack, align_stacked_channels, run_pipeline_diagnostics, run_calibration_qc
+    global calibrate_and_stack, stack_precalibrated_files, align_stacked_channels
+    global run_pipeline_diagnostics, run_calibration_qc
     if make_master_bias is None or make_master_flat is None:
         from astro_image_lab.calibration import make_master_bias as imported_make_master_bias
         from astro_image_lab.calibration import make_master_flat as imported_make_master_flat
@@ -662,6 +720,12 @@ def _get_pipeline_functions():
         from astro_image_lab.stacking import calibrate_and_stack as imported_calibrate_and_stack
 
         calibrate_and_stack = imported_calibrate_and_stack
+    if stack_precalibrated_files is None:
+        from astro_image_lab.stacking import (
+            stack_precalibrated_files as imported_stack_precalibrated_files,
+        )
+
+        stack_precalibrated_files = imported_stack_precalibrated_files
     if align_stacked_channels is None:
         from astro_image_lab.channel_alignment import (
             align_stacked_channels as imported_align_stacked_channels,
@@ -686,6 +750,7 @@ def _get_pipeline_functions():
         load_fits,
         save_fits,
         calibrate_and_stack,
+        stack_precalibrated_files,
         align_stacked_channels,
         run_pipeline_diagnostics,
         run_calibration_qc,
@@ -740,6 +805,7 @@ def run_pipeline(config_path: Path) -> list[Path]:
         fits_loader,
         fits_saver,
         stack_science,
+        stack_precalibrated,
         align_channels,
         diagnose_pipeline,
         qc_calibration,
@@ -756,89 +822,115 @@ def run_pipeline(config_path: Path) -> list[Path]:
     master_flat_paths: dict[str, Path] = {}
     stacked_images: dict[str, Any] = {}
 
-    master_bias = make_bias(config["bias_files"])
-    _bias_data, bias_header = fits_loader(config["bias_files"][0])
-    master_bias_path = output_dirs["calibrated"] / "master_bias.fits"
-    fits_saver(master_bias, bias_header, master_bias_path)
-    written_files.append(master_bias_path)
-    print(f"Wrote {master_bias_path}")
+    if config["input_mode"] == "raw":
+        master_bias = make_bias(config["bias_files"])
+        _bias_data, bias_header = fits_loader(config["bias_files"][0])
+        master_bias_path = output_dirs["calibrated"] / "master_bias.fits"
+        fits_saver(master_bias, bias_header, master_bias_path)
+        written_files.append(master_bias_path)
+        print(f"Wrote {master_bias_path}")
 
-    calibration_qc = config["calibration_qc"]
-    if calibration_qc["enabled"]:
-        qc_dir = output_dirs["analysis"] / "diagnostics"
-        qc_files, _qc_messages, selected_bias_files, selected_flat_files = qc_calibration(
-            bias_files=config["bias_files"],
-            flat_files=config["flat_files"],
-            master_bias=master_bias,
-            output_dir=qc_dir,
-            config=calibration_qc,
-        )
-        written_files.extend(qc_files)
-        for qc_file in qc_files:
-            print(f"Wrote {qc_file}")
-        if selected_bias_files != config["bias_files"]:
-            config["bias_files"] = selected_bias_files
-            master_bias = make_bias(config["bias_files"])
-            _bias_data, bias_header = fits_loader(config["bias_files"][0])
-            fits_saver(master_bias, bias_header, master_bias_path)
-            print(f"Wrote {master_bias_path}")
-        config["flat_files"] = selected_flat_files
+        calibration_qc = config["calibration_qc"]
+        if calibration_qc["enabled"]:
+            qc_dir = output_dirs["analysis"] / "diagnostics"
+            qc_files, _qc_messages, selected_bias_files, selected_flat_files = qc_calibration(
+                bias_files=config["bias_files"],
+                flat_files=config["flat_files"],
+                master_bias=master_bias,
+                output_dir=qc_dir,
+                config=calibration_qc,
+            )
+            written_files.extend(qc_files)
+            for qc_file in qc_files:
+                print(f"Wrote {qc_file}")
+            if selected_bias_files != config["bias_files"]:
+                config["bias_files"] = selected_bias_files
+                master_bias = make_bias(config["bias_files"])
+                _bias_data, bias_header = fits_loader(config["bias_files"][0])
+                fits_saver(master_bias, bias_header, master_bias_path)
+                print(f"Wrote {master_bias_path}")
+            config["flat_files"] = selected_flat_files
 
-    for filter_name in sorted(config["science_files"]):
-        master_flat = make_flat(config["flat_files"][filter_name], master_bias)
-        _flat_data, flat_header = fits_loader(config["flat_files"][filter_name][0])
-        master_flat_path = output_dirs["calibrated"] / f"master_flat_{filter_name}.fits"
-        fits_saver(master_flat, flat_header, master_flat_path)
-        written_files.append(master_flat_path)
-        master_flats[filter_name] = master_flat
-        master_flat_paths[filter_name] = master_flat_path
-        print(f"Wrote {master_flat_path}")
+        for filter_name in sorted(config["science_files"]):
+            master_flat = make_flat(config["flat_files"][filter_name], master_bias)
+            _flat_data, flat_header = fits_loader(config["flat_files"][filter_name][0])
+            master_flat_path = output_dirs["calibrated"] / f"master_flat_{filter_name}.fits"
+            fits_saver(master_flat, flat_header, master_flat_path)
+            written_files.append(master_flat_path)
+            master_flats[filter_name] = master_flat
+            master_flat_paths[filter_name] = master_flat_path
+            print(f"Wrote {master_flat_path}")
 
-        alignment = config["alignment"]
-        stacked_image, filter_report_records = stack_science(
-            config["science_files"][filter_name],
-            master_bias,
-            master_flat,
-            align=alignment["enabled"],
-            min_area=alignment["min_area"],
-            sigma=config["sigma"],
-            maxiters=config["maxiters"],
-            return_alignment_report=True,
-            filter_name=filter_name,
-            fail_policy=alignment["fail_policy"],
-            alignment_method=alignment["method"],
-            detection_sigma=alignment["detection_sigma"],
-            normalize_before_stack=config["stacking"]["normalize_before_stack"],
-        )
-        alignment_report_records.extend(filter_report_records)
-        _science_data, science_header = fits_loader(config["science_files"][filter_name][0])
-        stacked_path = output_dirs["stacked"] / f"stacked_{filter_name}.fits"
-        fits_saver(stacked_image, science_header, stacked_path)
-        written_files.append(stacked_path)
-        stacked_paths[filter_name] = stacked_path
-        stacked_images[filter_name] = stacked_image
-        print(f"Wrote {stacked_path}")
+            alignment = config["alignment"]
+            stacked_image, filter_report_records = stack_science(
+                config["science_files"][filter_name],
+                master_bias,
+                master_flat,
+                align=alignment["enabled"],
+                min_area=alignment["min_area"],
+                sigma=config["sigma"],
+                maxiters=config["maxiters"],
+                return_alignment_report=True,
+                filter_name=filter_name,
+                fail_policy=alignment["fail_policy"],
+                alignment_method=alignment["method"],
+                detection_sigma=alignment["detection_sigma"],
+                normalize_before_stack=config["stacking"]["normalize_before_stack"],
+            )
+            alignment_report_records.extend(filter_report_records)
+            _science_data, science_header = fits_loader(config["science_files"][filter_name][0])
+            stacked_path = output_dirs["stacked"] / f"stacked_{filter_name}.fits"
+            fits_saver(stacked_image, science_header, stacked_path)
+            written_files.append(stacked_path)
+            stacked_paths[filter_name] = stacked_path
+            stacked_images[filter_name] = stacked_image
+            print(f"Wrote {stacked_path}")
 
-    diagnostics = config["diagnostics"]
-    if diagnostics["enabled"]:
-        diagnostics_dir = output_dirs["analysis"] / "diagnostics"
-        diagnostic_files = diagnose_pipeline(
-            bias_files=config["bias_files"],
-            flat_files=config["flat_files"],
-            science_files=config["science_files"],
-            master_bias=master_bias,
-            master_bias_path=master_bias_path,
-            master_flats=master_flats,
-            master_flat_paths=master_flat_paths,
-            stacked_images=stacked_images,
-            stacked_paths=stacked_paths,
-            output_dir=diagnostics_dir,
-            config=diagnostics,
-            normalize_before_stack=config["stacking"]["normalize_before_stack"],
-        )
-        written_files.extend(diagnostic_files)
-        for diagnostic_file in diagnostic_files:
-            print(f"Wrote {diagnostic_file}")
+        diagnostics = config["diagnostics"]
+        if diagnostics["enabled"]:
+            diagnostics_dir = output_dirs["analysis"] / "diagnostics"
+            diagnostic_files = diagnose_pipeline(
+                bias_files=config["bias_files"],
+                flat_files=config["flat_files"],
+                science_files=config["science_files"],
+                master_bias=master_bias,
+                master_bias_path=master_bias_path,
+                master_flats=master_flats,
+                master_flat_paths=master_flat_paths,
+                stacked_images=stacked_images,
+                stacked_paths=stacked_paths,
+                output_dir=diagnostics_dir,
+                config=diagnostics,
+                normalize_before_stack=config["stacking"]["normalize_before_stack"],
+            )
+            written_files.extend(diagnostic_files)
+            for diagnostic_file in diagnostic_files:
+                print(f"Wrote {diagnostic_file}")
+    else:
+        for filter_name in sorted(config["precalibrated_files"]):
+            alignment = config["alignment"]
+            calibrated_files = config["precalibrated_files"][filter_name]
+            stacked_image, filter_report_records = stack_precalibrated(
+                calibrated_files,
+                align=alignment["enabled"],
+                min_area=alignment["min_area"],
+                sigma=config["sigma"],
+                maxiters=config["maxiters"],
+                return_alignment_report=True,
+                filter_name=filter_name,
+                fail_policy=alignment["fail_policy"],
+                alignment_method=alignment["method"],
+                detection_sigma=alignment["detection_sigma"],
+                normalize_before_stack=config["stacking"]["normalize_before_stack"],
+            )
+            alignment_report_records.extend(filter_report_records)
+            _calibrated_data, calibrated_header = fits_loader(calibrated_files[0])
+            stacked_path = output_dirs["stacked"] / f"stacked_{filter_name}.fits"
+            fits_saver(stacked_image, calibrated_header, stacked_path)
+            written_files.append(stacked_path)
+            stacked_paths[filter_name] = stacked_path
+            stacked_images[filter_name] = stacked_image
+            print(f"Wrote {stacked_path}")
 
     channel_alignment = config["channel_alignment"]
     if channel_alignment["enabled"]:

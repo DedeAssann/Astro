@@ -145,7 +145,7 @@ data/<OBJECT_NAME>/
 └── analysis/
 ```
 
-The CLI accepts `.fits`, `.fit`, and `.fts` filenames case-insensitively, sorts discovered lists for reproducibility, and creates output directories when needed. If `calibration_qc.enabled` or `diagnostics.enabled` is true, the pipeline also writes diagnostic products under `data/<OBJECT_NAME>/analysis/diagnostics/`. For each configured science filter, it writes:
+The CLI accepts `.fits`, `.fit`, and `.fts` filenames case-insensitively, sorts discovered lists for reproducibility, and creates output directories when needed. The default `input_mode: raw` preserves the original behavior: bias, flat, and raw science frames are discovered from the layout above, calibrated, optionally aligned, and stacked. If `calibration_qc.enabled` or `diagnostics.enabled` is true, the raw-mode pipeline also writes diagnostic products under `data/<OBJECT_NAME>/analysis/diagnostics/`. For each configured science filter, raw mode writes:
 
 - `master_bias.fits` to `data/<OBJECT_NAME>/calibrated/`
 - `master_flat_<filter>.fits` to `data/<OBJECT_NAME>/calibrated/`
@@ -155,6 +155,54 @@ The CLI accepts `.fits`, `.fit`, and `.fts` filenames case-insensitively, sorts 
 - When calibration QC is enabled, `analysis/diagnostics/bias_frame_statistics.csv`, `flat_frame_statistics.csv`, `calibration_qc_warnings.txt`, `bias_frame_mean_median_distribution.png`, and one `flat_<filter>_linearity_curve.png` per filter
 - When diagnostics are enabled, `analysis/diagnostics/pixel_statistics.csv` and histogram PNGs for random bias/master-bias, flat/master-flat, science calibration, optional stacking normalization, and stacking comparisons
 
+
+### Processing already-calibrated data
+
+When the science frames are already bias/flat corrected, set `input_mode: precalibrated`. This mode skips master-bias creation, master-flat creation, science calibration, and calibration-frame QC. It uses the already-calibrated arrays directly as stack inputs while preserving existing frame alignment, `stacking.normalize_before_stack`, sigma-clipped stacking, channel alignment, visualization, and reporting behavior.
+
+Compact precalibrated configs discover supported FITS files from `data/<OBJECT_NAME>/calibrated/<filter>/`:
+
+```yaml
+object_name: M83
+data_root: data
+input_mode: precalibrated
+filters:
+  - red
+  - green
+  - blue
+alignment:
+  enabled: true
+  method: astroalign
+  min_area: 12
+  fail_policy: raise
+channel_alignment:
+  enabled: true
+  reference_filter: green
+output_dirs:
+  calibrated: data/M83/calibrated
+  stacked: data/M83/stacked
+  figures: data/M83/figures
+  analysis: data/M83/analysis
+```
+
+You can also bypass directory discovery with explicit already-calibrated file lists:
+
+```yaml
+input_mode: precalibrated
+precalibrated_files:
+  red:
+    - path/to/red_001.fits
+    - path/to/red_002.fit
+  green:
+    - path/to/green_001.fts
+output_dirs:
+  calibrated: data/M83/calibrated
+  stacked: data/M83/stacked
+  figures: data/M83/figures
+  analysis: data/M83/analysis
+```
+
+Precalibrated mode writes `stacked_<filter>.fits` to the configured stacked directory, always writes `alignment_report.csv`, and still writes `channel_alignment_report.csv` plus `stacked/aligned_channels/stacked_<filter>_aligned.fits` when channel alignment is enabled. It does not require or read `bias_files`, `flat_files`, `calibration/bias/`, or `calibration/flats/`, and it does not write `master_bias.fits` or `master_flat_<filter>.fits`.
 
 
 ### Stacking scale control
@@ -280,7 +328,7 @@ channel_alignment:
 
 The reference filter defaults to green when green is available, otherwise the first available filter is used. Successful outputs are written under `data/<OBJECT_NAME>/stacked/aligned_channels/` as `stacked_<filter>_aligned.fits`, and `channel_alignment_report.csv` records each channel status (`reference`, `aligned`, or `failed`). `scripts/make_demo_figures.py` still renders per-filter previews from the regular stacked products, but its RGB composite prefers aligned channel files when they exist and falls back to regular `stacked_<filter>.fits` files otherwise; the CLI prints the RGB source paths it used.
 
-Explicit config mode is still supported for custom file selections. Use `configs/m83_explicit_example.yaml` as a template with `bias_files`, `flat_files`, `science_files`, and optional `output_dirs`. For backward compatibility, older configs can omit `output_dirs` and keep using `output_dir`; in that case all generated FITS outputs are written to the single legacy directory.
+Explicit raw config mode is still supported for custom file selections. Use `configs/m83_explicit_example.yaml` as a template with `bias_files`, `flat_files`, `science_files`, and optional `output_dirs`. For precalibrated data, use `input_mode: precalibrated` with `precalibrated_files`. For backward compatibility, older configs can omit `output_dirs` and keep using `output_dir`; in that case all generated FITS outputs are written to the single legacy directory.
 
 ## Testing
 
